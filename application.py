@@ -18,11 +18,9 @@ import psutil
 import tempfile
 import gdown
 from pathlib import Path
-from queue import Queue
 import warnings
 from typing import Optional, Dict, List, Tuple
 import threading
-
 
 warnings.filterwarnings('ignore')
 logging.basicConfig(
@@ -82,14 +80,14 @@ SHAPEFILE_PATH = os.path.join(SHAPE_DIR, "tl_2020_us_zcta510.shp")
 
 def download_from_drive(file_id, output_path):
     if not os.path.exists(output_path):
-        gdown.download(id=file_id, output=output_path, quiet=False)
-        # Verify file was downloaded and is not empty
+        with st.spinner(f"Downloading {os.path.basename(output_path)}..."):
+            gdown.download(id=file_id, output=output_path, quiet=False)
         if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             logger.info(f"Successfully downloaded {output_path}")
         else:
             logger.error(f"Failed to download or empty file: {output_path}")
             raise ValueError(f"Download failed for file: {output_path}")
-        
+
 # Load model and vectorizer once
 @st.cache_resource
 def load_ml_resources():
@@ -120,7 +118,6 @@ def load_all_models():
     return sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer
 
 sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer = load_all_models()
-
 
 # Emoticon map
 EMOTICON_MAP = {
@@ -205,24 +202,62 @@ class MemoryMonitor:
         gc.collect()
 
 def load_data(dataset_key):
-    file_info = DATASET_FILES[dataset_key]
-    path = os.path.join(DATA_DIR, file_info["name"])
-    download_from_drive(file_info["id"], path)
-    df = pd.read_csv(path, low_memory=False)
-    df.columns = [col.strip().lower().replace(' ', '_') for col in df.columns]
-    df = df.dropna(subset=['latitude', 'longitude'])
-    df = df[(df['latitude'].between(-90, 90)) & (df['longitude'].between(-180, 180))]
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    return df
+    if 'loaded_data' not in st.session_state:
+        st.session_state['loaded_data'] = {}
+    if dataset_key not in st.session_state['loaded_data']:
+        file_info = DATASET_FILES[dataset_key]
+        path = os.path.join(DATA_DIR, file_info["name"])
+        with st.spinner(f"Downloading and loading {dataset_key} dataset..."):
+            download_from_drive(file_info["id"], path)
+            dtypes = {
+                'latitude': 'float32',
+                'longitude': 'float32',
+                'category': 'int8',
+                'emotion_confidence': 'float32',
+                'median_income': 'float32',
+                'incident_zip': 'str'
+            }
+            usecols = ['latitude', 'longitude', 'category', 'emotion', 'emotion_confidence', 'date', 'median_income', 'incident_zip']
+            try:
+                df = pd.read_csv(path, usecols=usecols, dtype=dtypes, low_memory=False)
+                df.columns = [col.strip().lower().replace(' ', '_') for col in df.columns]
+                df = df.dropna(subset=['latitude', 'longitude'])
+                df = df[(df['latitude'].between(-90, 90)) & (df['longitude'].between(-180, 180))]
+                if 'date' in df.columns:
+                    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+                st.session_state['loaded_data'][dataset_key] = df
+                logger.info(f"Loaded dataset: {dataset_key}")
+            except Exception as e:
+                logger.error(f"Failed to load dataset {dataset_key}: {e}")
+                st.error(f"Error loading dataset {dataset_key}: {str(e)}")
+                return None
+    return st.session_state['loaded_data'][dataset_key]
 
 def load_incident_data(incident_key):
-    file_info = INCIDENT_FILES[incident_key]
-    path = os.path.join(DATA_DIR, file_info["name"])
-    download_from_drive(file_info["id"], path)
-    incident_df = pd.read_csv(path, low_memory=False)
-    incident_df['Incident Zip'] = incident_df['Incident Zip'].astype(str).str.zfill(5)
-    return incident_df
+    if 'loaded_incident' not in st.session_state:
+        st.session_state['loaded_incident'] = {}
+    if incident_key not in st.session_state['loaded_incident']:
+        file_info = INCIDENT_FILES[incident_key]
+        path = os.path.join(DATA_DIR, file_info["name"])
+        with st.spinner(f"Downloading and loading {incident_key} incident data..."):
+            download_from_drive(file_info["id"], path)
+            dtypes = {
+                'Incident Zip': 'str',
+                'negative': 'int32',
+                'positive': 'int32',
+                'neutral': 'int32'
+            }
+            usecols = ['Incident Zip', 'negative', 'positive', 'neutral']
+            try:
+                incident_df = pd.read_csv(path, usecols=usecols, dtype=dtypes, low_memory=False)
+                incident_df['Incident Zip'] = incident_df['Incident Zip'].astype(str).str.zfill(5)
+                st.session_state['loaded_incident'][incident_key] = incident_df
+                logger.info(f"Loaded incident data: {incident_key}")
+            except Exception as e:
+                logger.error(f"Failed to load incident data {incident_key}: {e}")
+                st.error(f"Error loading incident data {incident_key}: {str(e)}")
+                return None
+    return st.session_state['loaded_incident'][incident_key]
 
 @st.cache_resource
 def load_shapefile():
@@ -230,15 +265,18 @@ def load_shapefile():
         path = os.path.join(SHAPE_DIR, sf["name"])
         download_from_drive(sf["id"], path)
     try:
-        zcta_gdf = gpd.read_file(SHAPEFILE_PATH)
-        zcta_gdf['ZCTA5CE10'] = zcta_gdf['ZCTA5CE10'].astype(str).str.zfill(5)
-        nyc_zip_prefixes = ('100', '101', '102', '103', '104', '111', '112', '113', '114', '116')
-        nyc_gdf = zcta_gdf[zcta_gdf['ZCTA5CE10'].str.startswith(nyc_zip_prefixes)]
-        return nyc_gdf
+        with st.spinner("Loading shapefile..."):
+            zcta_gdf = gpd.read_file(SHAPEFILE_PATH)
+            zcta_gdf['ZCTA5CE10'] = zcta_gdf['ZCTA5CE10'].astype(str).str.zfill(5)
+            nyc_zip_prefixes = ('100', '101', '102', '103', '104', '111', '112', '113', '114', '116')
+            nyc_gdf = zcta_gdf[zcta_gdf['ZCTA5CE10'].str.startswith(nyc_zip_prefixes)]
+            logger.info("Shapefile loaded successfully")
+            return nyc_gdf
     except Exception as e:
         logger.error(f"Failed to load shapefile: {e}")
+        st.error(f"Error loading shapefile: {str(e)}")
         raise
-    
+
 # =========================
 # VISUALIZATION FUNCTIONS
 # =========================
@@ -255,16 +293,17 @@ def advanced_visualizations(df):
     explode = [0.1 if i == 0 else 0 for i in range(len(labels))]
 
     # 1. Pie Chart: Top 5 Emotions
-    fig, ax = plt.subplots(figsize=(10, 10))
-    ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%',
-           shadow=True, startangle=90, textprops={'fontsize': 14})
-    ax.set_title('Top 5 Emotions in Tweets', pad=20, fontsize=18)
-    ax.axis('equal')
-    st.pyplot(fig)
-    plt.close(fig)
-    st.markdown(f"Summary: The most frequent emotion is {labels[0]} "
-                f"with {sizes[0]} tweets ({sizes[0]/sum(sizes)*100:.1f}%). "
-                f"Top emotions together account for {sum(sizes)} tweets.")
+    with st.spinner("Generating Emotion Pie Chart..."):
+        fig, ax = plt.subplots(figsize=(10, 10))
+        ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%',
+               shadow=True, startangle=90, textprops={'fontsize': 14})
+        ax.set_title('Top 5 Emotions in Tweets', pad=20, fontsize=18)
+        ax.axis('equal')
+        st.pyplot(fig)
+        plt.close(fig)
+        st.markdown(f"Summary: The most frequent emotion is {labels[0]} "
+                    f"with {sizes[0]} tweets ({sizes[0]/sum(sizes)*100:.1f}%). "
+                    f"Top emotions together account for {sum(sizes)} tweets.")
 
     # 2. Stacked Bar Chart: Emotion by Sentiment Category
     top_emotions = df['emotion'].value_counts().head(top_n).index
@@ -272,270 +311,241 @@ def advanced_visualizations(df):
         .groupby(['emotion', 'category']).size().unstack(fill_value=0) \
         .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
 
-    fig, ax = plt.subplots(figsize=(12, 7))
-    emotion_sentiment.plot(kind='bar', stacked=True, color=sns.color_palette("tab10", 3), ax=ax)
-    ax.set_title('Emotion Distribution by Sentiment Category', fontsize=18)
-    ax.set_xlabel('Emotion', fontsize=14)
-    ax.set_ylabel('Number of Tweets', fontsize=14)
-    ax.legend(title='Sentiment', fontsize=12)
-    plt.xticks(rotation=45, ha='right')
-    st.pyplot(fig)
-    plt.close(fig)
-    st.markdown("Summary: This chart shows how each of the top emotions "
-                "is distributed across positive, neutral, and negative sentiments.")
+    with st.spinner("Generating Stacked Bar Chart..."):
+        fig, ax = plt.subplots(figsize=(12, 7))
+        emotion_sentiment.plot(kind='bar', stacked=True, color=sns.color_palette("tab10", 3), ax=ax)
+        ax.set_title('Emotion Distribution by Sentiment Category', fontsize=18)
+        ax.set_xlabel('Emotion', fontsize=14)
+        ax.set_ylabel('Number of Tweets', fontsize=14)
+        ax.legend(title='Sentiment', fontsize=12)
+        plt.xticks(rotation=45, ha='right')
+        st.pyplot(fig)
+        plt.close(fig)
+        st.markdown("Summary: This chart shows how each of the top emotions "
+                    "is distributed across positive, neutral, and negative sentiments.")
 
     # 3. Box Plot: Emotion Confidence
-    fig, ax = plt.subplots(figsize=(12, 7))
-    sns.boxplot(x='emotion', y='emotion_confidence',
-                data=df[df['emotion'].isin(top_emotions)], palette='tab10', ax=ax)
-    ax.set_title('Emotion Confidence Distribution by Top 5 Emotions', fontsize=18)
-    ax.set_xlabel('Emotion', fontsize=14)
-    ax.set_ylabel('Emotion Confidence', fontsize=14)
-    plt.xticks(rotation=45, ha='right')
-    st.pyplot(fig)
-    plt.close(fig)
-    st.markdown("Summary: Higher confidence scores indicate stronger certainty "
-                "in emotion classification. This plot compares confidence levels for the top emotions.")
+    with st.spinner("Generating Box Plot..."):
+        fig, ax = plt.subplots(figsize=(12, 7))
+        sns.boxplot(x='emotion', y='emotion_confidence',
+                    data=df[df['emotion'].isin(top_emotions)], palette='tab10', ax=ax)
+        ax.set_title('Emotion Confidence Distribution by Top 5 Emotions', fontsize=18)
+        ax.set_xlabel('Emotion', fontsize=14)
+        ax.set_ylabel('Emotion Confidence', fontsize=14)
+        plt.xticks(rotation=45, ha='right')
+        st.pyplot(fig)
+        plt.close(fig)
+        st.markdown("Summary: Higher confidence scores indicate stronger certainty "
+                    "in emotion classification. This plot compares confidence levels for the top emotions.")
 
     # 4. Scatter Plot: Latitude vs Longitude by Sentiment
-    fig, ax = plt.subplots(figsize=(12, 8))
-    sns.scatterplot(
-        x='longitude', y='latitude',
-        hue='category', palette={1: '#ff9999', 0: '#66b3ff', -1: '#99ff99'},
-        data=df, alpha=0.6, ax=ax
-    )
-    ax.set_title('Geographical Distribution of Tweet Sentiments', fontsize=18)
-    st.pyplot(fig)
-    plt.close(fig)
-    st.markdown("Summary: Each point represents a tweet's location. Colors indicate sentiment category.")
+    with st.spinner("Generating Scatter Plot..."):
+        fig, ax = plt.subplots(figsize=(12, 8))
+        sns.scatterplot(
+            x='longitude', y='latitude',
+            hue='category', palette={1: '#ff9999', 0: '#66b3ff', -1: '#99ff99'},
+            data=df, alpha=0.6, ax=ax
+        )
+        ax.set_title('Geographical Distribution of Tweet Sentiments', fontsize=18)
+        st.pyplot(fig)
+        plt.close(fig)
+        st.markdown("Summary: Each point represents a tweet's location. Colors indicate sentiment category.")
 
     # 5. Histogram: Median Income
     if 'median_income' in df.columns:
-        fig, ax = plt.subplots(figsize=(12, 7))
-        sns.histplot(df['median_income'].dropna(), bins=50, kde=True, color='purple', ax=ax)
-        ax.set_title('Distribution of Median Income in Tweet Locations', fontsize=18)
-        st.pyplot(fig)
-        plt.close(fig)
-        st.markdown("Summary: This distribution shows the range of median incomes "
-                    "for locations mentioned in tweets.")
+        with st.spinner("Generating Histogram..."):
+            fig, ax = plt.subplots(figsize=(12, 7))
+            sns.histplot(df['median_income'].dropna(), bins=50, kde=True, color='purple', ax=ax)
+            ax.set_title('Distribution of Median Income in Tweet Locations', fontsize=18)
+            st.pyplot(fig)
+            plt.close(fig)
+            st.markdown("Summary: This distribution shows the range of median incomes "
+                        "for locations mentioned in tweets.")
 
     # 6. Time Series: Sentiment Trends
     if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        sentiment_over_time = df.groupby([df['date'].dt.date, 'category']) \
-                                .size().unstack(fill_value=0) \
-                                .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
-        fig, ax = plt.subplots(figsize=(14, 7))
-        for col in sentiment_over_time.columns:
-            ax.plot(sentiment_over_time.index, sentiment_over_time[col], label=col, linewidth=2)
-        ax.legend(title='Sentiment', fontsize=12)
-        ax.set_title('Sentiment Trends Over Time', fontsize=18)
-        st.pyplot(fig)
-        plt.close(fig)
-        st.markdown("Summary: This line chart tracks how the frequency of each sentiment "
-                    "has changed over time in the dataset.")
+        with st.spinner("Generating Time Series Plot..."):
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            sentiment_over_time = df.groupby([df['date'].dt.date, 'category']) \
+                                    .size().unstack(fill_value=0) \
+                                    .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
+            fig, ax = plt.subplots(figsize=(14, 7))
+            for col in sentiment_over_time.columns:
+                ax.plot(sentiment_over_time.index, sentiment_over_time[col], label=col, linewidth=2)
+            ax.legend(title='Sentiment', fontsize=12)
+            ax.set_title('Sentiment Trends Over Time', fontsize=18)
+            st.pyplot(fig)
+            plt.close(fig)
+            st.markdown("Summary: This line chart tracks how the frequency of each sentiment "
+                        "has changed over time in the dataset.")
 
     # 7. Heatmap: Emotion vs Sentiment
-    emotion_sentiment_counts = df[df['emotion'].isin(top_emotions)] \
-        .groupby(['emotion', 'category']).size().unstack(fill_value=0) \
-        .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
-    fig, ax = plt.subplots(figsize=(10, 8))
-    sns.heatmap(emotion_sentiment_counts, annot=True, fmt='d', cmap='YlGnBu', ax=ax)
-    ax.set_title('Emotion vs Sentiment Correlation', fontsize=18)
-    st.pyplot(fig)
-    plt.close(fig)
-    st.markdown("Summary: This heatmap shows the relationship between emotions "
-                "and sentiment categories, with cell values representing tweet counts.")
+    with st.spinner("Generating Heatmap..."):
+        emotion_sentiment_counts = df[df['emotion'].isin(top_emotions)] \
+            .groupby(['emotion', 'category']).size().unstack(fill_value=0) \
+            .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
+        fig, ax = plt.subplots(figsize=(10, 8))
+        sns.heatmap(emotion_sentiment_counts, annot=True, fmt='d', cmap='YlGnBu', ax=ax)
+        ax.set_title('Emotion vs Sentiment Correlation', fontsize=18)
+        st.pyplot(fig)
+        plt.close(fig)
+        st.markdown("Summary: This heatmap shows the relationship between emotions "
+                    "and sentiment categories, with cell values representing tweet counts.")
 
 def sentiment_pie_chart(df):
     st.subheader("Sentiment Distribution")
-    value_counts = df['category'].value_counts()
-    labels = ['Positive', 'Neutral', 'Negative']
-    sizes = [
-        value_counts.get(1, 0),
-        value_counts.get(0, 0),
-        value_counts.get(-1, 0)
-    ]
-    fig, ax = plt.subplots(figsize=(6, 6))
-    colors = ['#4CAF50', '#2196F3', '#F44336']
-    explode = (0.1, 0, 0)
-    ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', shadow=True, startangle=90)
-    ax.axis('equal')
-    st.pyplot(fig)
-    plt.close(fig)
+    with st.spinner("Generating Sentiment Pie Chart..."):
+        value_counts = df['category'].value_counts()
+        labels = ['Positive', 'Neutral', 'Negative']
+        sizes = [
+            value_counts.get(1, 0),
+            value_counts.get(0, 0),
+            value_counts.get(-1, 0)
+        ]
+        fig, ax = plt.subplots(figsize=(6, 6))
+        colors = ['#4CAF50', '#2196F3', '#F44336']
+        explode = (0.1, 0, 0)
+        ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', shadow=True, startangle=90)
+        ax.axis('equal')
+        st.pyplot(fig)
+        plt.close(fig)
 
 def emotion_pie_chart(df):
     st.subheader("Emotion Distribution")
-    value_counts = df['emotion'].value_counts()
-    labels = value_counts.index.tolist()
-    sizes = value_counts.values.tolist()
-    fig, ax = plt.subplots(figsize=(6, 6))
-    colors = sns.color_palette("husl", len(labels))
-    explode = [0.1] + [0] * (len(labels) - 1)
-    ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', shadow=True, startangle=90)
-    ax.axis('equal')
-    st.pyplot(fig)
-    plt.close(fig)
+    with st.spinner("Generating Emotion Pie Chart..."):
+        value_counts = df['emotion'].value_counts()
+        labels = value_counts.index.tolist()
+        sizes = value_counts.values.tolist()
+        fig, ax = plt.subplots(figsize=(6, 6))
+        colors = sns.color_palette("husl", len(labels))
+        explode = [0.1] + [0] * (len(labels) - 1)
+        ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', shadow=True, startangle=90)
+        ax.axis('equal')
+        st.pyplot(fig)
+        plt.close(fig)
 
 def sentiment_map(df):
-    nyc_bbox = {'min_lon': -74.27, 'max_lon': -73.68, 'min_lat': 40.48, 'max_lat': 40.95}
-    nyc_df = df[(df['longitude'].between(nyc_bbox['min_lon'], nyc_bbox['max_lon'])) &
-                (df['latitude'].between(nyc_bbox['min_lat'], nyc_bbox['max_lat']))]
-    sentiment_map = {-1: "#e74c3c", 0: "#f39c12", 1: "#2ecc71"}
-    for cat, color in sentiment_map.items():
-        sub_df = nyc_df[nyc_df['category'] == cat].sample(min(2000, len(nyc_df[nyc_df['category'] == cat])), random_state=42)
-        fig = px.scatter_mapbox(sub_df, lat="latitude", lon="longitude",
-                                color_discrete_sequence=[color], zoom=10, height=400,
-                                hover_data=["emotion"])
-        fig.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
-        st.plotly_chart(fig, use_container_width=True)
+    with st.spinner("Generating Sentiment Map..."):
+        nyc_bbox = {'min_lon': -74.27, 'max_lon': -73.68, 'min_lat': 40.48, 'max_lat': 40.95}
+        nyc_df = df[(df['longitude'].between(nyc_bbox['min_lon'], nyc_bbox['max_lon'])) &
+                    (df['latitude'].between(nyc_bbox['min_lat'], nyc_bbox['max_lat']))]
+        sentiment_map = {-1: "#e74c3c", 0: "#f39c12", 1: "#2ecc71"}
+        for cat, color in sentiment_map.items():
+            sub_df = nyc_df[nyc_df['category'] == cat].sample(min(2000, len(nyc_df[nyc_df['category'] == cat])), random_state=42)
+            fig = px.scatter_mapbox(sub_df, lat="latitude", lon="longitude",
+                                    color_discrete_sequence=[color], zoom=10, height=400,
+                                    hover_data=["emotion"])
+            fig.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
+            st.plotly_chart(fig, use_container_width=True)
 
 def emotion_map(df):
-    nyc_bbox = {'min_lon': -74.27, 'max_lon': -73.68, 'min_lat': 40.48, 'max_lat': 40.95}
-    nyc_df = df[(df['longitude'].between(nyc_bbox['min_lon'], nyc_bbox['max_lon'])) &
-                (df['latitude'].between(nyc_bbox['min_lat'], nyc_bbox['max_lat']))]
-    emotion_colors = {"joy": "#FFD700", "anger": "#FF4500", "sadness": "#1E90FF", "fear": "#9400D3"}
-    for emo, color in emotion_colors.items():
-        sub_df = nyc_df[nyc_df['emotion'] == emo].sample(min(2000, len(nyc_df[nyc_df['emotion'] == emo])), random_state=42)
-        fig = px.scatter_mapbox(sub_df, lat="latitude", lon="longitude",
-                                color_discrete_sequence=[color], zoom=10, height=400,
-                                hover_data=["category"])
-        fig.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
-        st.plotly_chart(fig, use_container_width=True)
+    with st.spinner("Generating Emotion Map..."):
+        nyc_bbox = {'min_lon': -74.27, 'max_lon': -73.68, 'min_lat': 40.48, 'max_lat': 40.95}
+        nyc_df = df[(df['longitude'].between(nyc_bbox['min_lon'], nyc_bbox['max_lon'])) &
+                    (df['latitude'].between(nyc_bbox['min_lat'], nyc_bbox['max_lat']))]
+        emotion_colors = {"joy": "#FFD700", "anger": "#FF4500", "sadness": "#1E90FF", "fear": "#9400D3"}
+        for emo, color in emotion_colors.items():
+            sub_df = nyc_df[nyc_df['emotion'] == emo].sample(min(2000, len(nyc_df[nyc_df['emotion'] == emo])), random_state=42)
+            fig = px.scatter_mapbox(sub_df, lat="latitude", lon="longitude",
+                                    color_discrete_sequence=[color], zoom=10, height=400,
+                                    hover_data=["category"])
+            fig.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
+            st.plotly_chart(fig, use_container_width=True)
 
 def zip_code_maps(incident_df, nyc_gdf):
     st.subheader("ZIP Code Sentiment Maps")
-
-    # Group totals for each category
-    incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
-
-    # Calculate total and percentages
-    incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
-    for col in ['negative', 'positive', 'neutral']:
-        incident_sums[col + '_pct'] = (incident_sums[col] / incident_sums['total']).fillna(0) * 100
-
-    # Merge shapefile with incident data
-    merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
-    merged_gdf[['negative', 'positive', 'neutral',
-                'negative_pct', 'positive_pct', 'neutral_pct']] = merged_gdf[
-                    ['negative', 'positive', 'neutral',
-                     'negative_pct', 'positive_pct', 'neutral_pct']].fillna(0)
-
-    # Plot both sets in one output
-    fig, axes = plt.subplots(2, 3, figsize=(20, 14))
-
-    # Row 1 = raw counts
-    categories_counts = ['negative', 'positive', 'neutral']
-    cmaps_counts = ['Reds', 'Greens', 'Blues']
-    for ax, cat, cmap in zip(axes[0], categories_counts, cmaps_counts):
-        merged_gdf.plot(column=cat, cmap=cmap, linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
-                        legend_kwds={'label': "Count", 'orientation': "vertical"})
-        ax.set_title(f"NYC {cat.capitalize()} Incidents (Count)", fontsize=14)
-        ax.axis('off')
-
-    # Row 2 = percentages
-    categories_pct = ['negative_pct', 'positive_pct', 'neutral_pct']
-    cmaps_pct = ['Reds', 'Greens', 'Blues']
-    for ax, cat, cmap in zip(axes[1], categories_pct, cmaps_pct):
-        merged_gdf.plot(column=cat, cmap=cmap, linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
-                        legend_kwds={'label': "Percentage", 'orientation': "vertical"})
-        ax.set_title(f"NYC {cat.replace('_pct','').capitalize()} Incidents (%)", fontsize=14)
-        ax.axis('off')
-
-    plt.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-
-    # Information under the maps
-    st.markdown("### Map Descriptions")
-    st.markdown("- Negative Incidents (Count): This map shows the raw count of negative sentiment incidents across NYC ZIP codes. Darker shades indicate higher counts.")
-    st.markdown("- Positive Incidents (Count): This map shows the raw count of positive sentiment incidents across NYC ZIP codes. Darker shades indicate higher counts.")
-    st.markdown("- Neutral Incidents (Count): This map shows the raw count of neutral sentiment incidents across NYC ZIP codes. Darker shades indicate higher counts.")
-    st.markdown("- Negative Incidents (%): This map shows the percentage of negative sentiment incidents relative to total incidents in each NYC ZIP code. Darker shades indicate higher percentages.")
-    st.markdown("- Positive Incidents (%): This map shows the percentage of positive sentiment incidents relative to total incidents in each NYC ZIP code. Darker shades indicate higher percentages.")
-    st.markdown("- Neutral Incidents (%): This map shows the percentage of neutral sentiment incidents relative to total incidents in each NYC ZIP code. Darker shades indicate higher percentages.")
+    with st.spinner("Generating ZIP Code Sentiment Maps..."):
+        incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
+        incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
+        for col in ['negative', 'positive', 'neutral']:
+            incident_sums[col + '_pct'] = (incident_sums[col] / incident_sums['total']).fillna(0) * 100
+        merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
+        merged_gdf[['negative', 'positive', 'neutral',
+                    'negative_pct', 'positive_pct', 'neutral_pct']] = merged_gdf[
+                        ['negative', 'positive', 'neutral',
+                         'negative_pct', 'positive_pct', 'neutral_pct']].fillna(0)
+        fig, axes = plt.subplots(2, 3, figsize=(20, 14))
+        categories_counts = ['negative', 'positive', 'neutral']
+        cmaps_counts = ['Reds', 'Greens', 'Blues']
+        for ax, cat, cmap in zip(axes[0], categories_counts, cmaps_counts):
+            merged_gdf.plot(column=cat, cmap=cmap, linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
+                            legend_kwds={'label': "Count", 'orientation': "vertical"})
+            ax.set_title(f"NYC {cat.capitalize()} Incidents (Count)", fontsize=14)
+            ax.axis('off')
+        categories_pct = ['negative_pct', 'positive_pct', 'neutral_pct']
+        cmaps_pct = ['Reds', 'Greens', 'Blues']
+        for ax, cat, cmap in zip(axes[1], categories_pct, cmaps_pct):
+            merged_gdf.plot(column=cat, cmap=cmap, linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
+                            legend_kwds={'label': "Percentage", 'orientation': "vertical"})
+            ax.set_title(f"NYC {cat.replace('_pct','').capitalize()} Incidents (%)", fontsize=14)
+            ax.axis('off')
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+        st.markdown("### Map Descriptions")
+        st.markdown("- Negative Incidents (Count): This map shows the raw count of negative sentiment incidents across NYC ZIP codes. Darker shades indicate higher counts.")
+        st.markdown("- Positive Incidents (Count): This map shows the raw count of positive sentiment incidents across NYC ZIP codes. Darker shades indicate higher counts.")
+        st.markdown("- Neutral Incidents (Count): This map shows the raw count of neutral sentiment incidents across NYC ZIP codes. Darker shades indicate higher counts.")
+        st.markdown("- Negative Incidents (%): This map shows the percentage of negative sentiment incidents relative to total incidents in each NYC ZIP code. Darker shades indicate higher percentages.")
+        st.markdown("- Positive Incidents (%): This map shows the percentage of positive sentiment incidents relative to total incidents in each NYC ZIP code. Darker shades indicate higher percentages.")
+        st.markdown("- Neutral Incidents (%): This map shows the percentage of neutral sentiment incidents relative to total incidents in each NYC ZIP code. Darker shades indicate higher percentages.")
 
 def zip_code_heatmap(incident_df, nyc_gdf):
     st.subheader("ZIP Code Sentiment Heatmap")
-
-    # Group totals for each category
-    incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
-    incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
-    incident_sums['combined_sentiment'] = (incident_sums['positive'] - incident_sums['negative']) / incident_sums['total'].replace(0, 1)  # Normalized sentiment score
-
-    # Merge shapefile with incident data
-    merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
-    merged_gdf['combined_sentiment'] = merged_gdf['combined_sentiment'].fillna(0)
-
-    # Create heatmap
-    fig, ax = plt.subplots(1, 1, figsize=(12, 10))
-    merged_gdf.plot(column='combined_sentiment', cmap='RdYlBu_r', linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
-                    legend_kwds={'label': "Sentiment Score", 'orientation': "vertical"})
-    ax.set_title("NYC Sentiment Heatmap 2020", fontsize=16)
-    ax.axis('off')
-
-    plt.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
-
-    # Information under the heatmap
-    st.markdown("### Heatmap Description")
-    st.markdown("- Sentiment Heatmap: This map shows a combined sentiment score across NYC ZIP codes, calculated as (Positive - Negative) / Total incidents. Red indicates more negative sentiment, blue indicates more positive sentiment, and yellow/green represents neutral areas.")
+    with st.spinner("Generating ZIP Code Sentiment Heatmap..."):
+        incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
+        incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
+        incident_sums['combined_sentiment'] = (incident_sums['positive'] - incident_sums['negative']) / incident_sums['total'].replace(0, 1)
+        merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
+        merged_gdf['combined_sentiment'] = merged_gdf['combined_sentiment'].fillna(0)
+        fig, ax = plt.subplots(1, 1, figsize=(12, 10))
+        merged_gdf.plot(column='combined_sentiment', cmap='RdYlBu_r', linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
+                        legend_kwds={'label': "Sentiment Score", 'orientation': "vertical"})
+        ax.set_title("NYC Sentiment Heatmap 2020", fontsize=16)
+        ax.axis('off')
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+        st.markdown("### Heatmap Description")
+        st.markdown("- Sentiment Heatmap: This map shows a combined sentiment score across NYC ZIP codes, calculated as (Positive - Negative) / Total incidents. Red indicates more negative sentiment, blue indicates more positive sentiment, and yellow/green represents neutral areas.")
 
 def borough_income_chart(df):
     st.subheader("Average Median Income by NYC Borough")
-
-    # Debug: Print column names to identify the correct ZIP code column
-    st.write("Available columns in dataset:", df.columns.tolist())
-
-    # Check if required columns exist
-    if 'Incident Zip' not in df.columns and 'incident_zip' not in df.columns and 'zip_code' not in df.columns:
-        st.error("Error: No ZIP code column (e.g., 'Incident Zip', 'incident_zip', or 'zip_code') found in the dataset.")
-        return
-
-    # Determine the ZIP code column to use
-    zip_column = 'Incident Zip' if 'Incident Zip' in df.columns else 'incident_zip' if 'incident_zip' in df.columns else 'zip_code'
-
-    # Rough mapping of ZIP code prefixes to boroughs
-    borough_map = {
-        "Manhattan": ['100', '101', '102'],
-        "Bronx": ['104'],
-        "Brooklyn": ['112'],
-        "Queens": ['110', '111', '113', '114', '116'],
-        "Staten Island": ['103']
-    }
-
-    def get_borough(zipcode):
-        zipcode = str(zipcode)
-        for borough, prefixes in borough_map.items():
-            if any(zipcode.startswith(pref) for pref in prefixes):
-                return borough
-        return None
-
-    df['borough'] = df[zip_column].apply(get_borough)
-
-    # Calculate average median income per borough
-    borough_income = (
-        df.dropna(subset=['median_income', 'borough'])
-          .groupby('borough')['median_income']
-          .mean()
-          .sort_values(ascending=False)
-    )
-
-    # Plot bar chart
-    fig, ax = plt.subplots(figsize=(8, 5))
-    borough_income.plot(kind='bar', color='skyblue', edgecolor='black', ax=ax)
-    ax.set_title('Average Median Income by NYC Borough', fontsize=16)
-    ax.set_ylabel('Median Income (USD)', fontsize=12)
-    ax.tick_params(axis='x', rotation=45)
-    ax.grid(axis='y', linestyle='--', alpha=0.6)
-
-    # Annotate bars with values
-    for i, value in enumerate(borough_income):
-        ax.text(i, value + 500, f"${value:,.0f}", ha='center', va='bottom', fontsize=10)
-
-    st.pyplot(fig)
-    plt.close(fig)
+    with st.spinner("Generating Borough Income Chart..."):
+        if 'incident_zip' not in df.columns and 'Incident Zip' not in df.columns and 'zip_code' not in df.columns:
+            st.error("Error: No ZIP code column (e.g., 'incident_zip', 'Incident Zip', or 'zip_code') found in the dataset.")
+            return
+        zip_column = 'incident_zip' if 'incident_zip' in df.columns else 'Incident Zip' if 'Incident Zip' in df.columns else 'zip_code'
+        borough_map = {
+            "Manhattan": ['100', '101', '102'],
+            "Bronx": ['104'],
+            "Brooklyn": ['112'],
+            "Queens": ['110', '111', '113', '114', '116'],
+            "Staten Island": ['103']
+        }
+        def get_borough(zipcode):
+            zipcode = str(zipcode)
+            for borough, prefixes in borough_map.items():
+                if any(zipcode.startswith(pref) for pref in prefixes):
+                    return borough
+            return None
+        df['borough'] = df[zip_column].apply(get_borough)
+        borough_income = (
+            df.dropna(subset=['median_income', 'borough'])
+              .groupby('borough')['median_income']
+              .mean()
+              .sort_values(ascending=False)
+        )
+        fig, ax = plt.subplots(figsize=(8, 5))
+        borough_income.plot(kind='bar', color='skyblue', edgecolor='black', ax=ax)
+        ax.set_title('Average Median Income by NYC Borough', fontsize=16)
+        ax.set_ylabel('Median Income (USD)', fontsize=12)
+        ax.tick_params(axis='x', rotation=45)
+        ax.grid(axis='y', linestyle='--', alpha=0.6)
+        for i, value in enumerate(borough_income):
+            ax.text(i, value + 500, f"${value:,.0f}", ha='center', va='bottom', fontsize=10)
+        st.pyplot(fig)
+        plt.close(fig)
 
 # Sidebar with heatmap preview
 with st.sidebar:
@@ -546,19 +556,20 @@ with st.sidebar:
         if dataset_choice not in st.session_state['loaded_incident']:
             st.session_state['loaded_incident'][dataset_choice] = load_incident_data(dataset_choice)
         incident_df = st.session_state['loaded_incident'][dataset_choice]
-        nyc_gdf = load_shapefile()
-        incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
-        incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
-        incident_sums['combined_sentiment'] = (incident_sums['positive'] - incident_sums['negative']) / incident_sums['total'].replace(0, 1)
-        merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
-        merged_gdf['combined_sentiment'] = merged_gdf['combined_sentiment'].fillna(0)
-
-        fig, ax = plt.subplots(1, 1, figsize=(5, 4))  # Smaller figure for sidebar
-        merged_gdf.plot(column='combined_sentiment', cmap='RdYlBu_r', linewidth=0.4, ax=ax, edgecolor='0.8', legend=False)
-        ax.set_title("Sentiment Preview", fontsize=10)
-        ax.axis('off')
-        st.pyplot(fig)
-        plt.close(fig)
+        if incident_df is not None:
+            nyc_gdf = load_shapefile()
+            incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
+            incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
+            incident_sums['combined_sentiment'] = (incident_sums['positive'] - incident_sums['negative']) / incident_sums['total'].replace(0, 1)
+            merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
+            merged_gdf['combined_sentiment'] = merged_gdf['combined_sentiment'].fillna(0)
+            with st.spinner("Generating Sidebar Heatmap..."):
+                fig, ax = plt.subplots(1, 1, figsize=(5, 4))
+                merged_gdf.plot(column='combined_sentiment', cmap='RdYlBu_r', linewidth=0.4, ax=ax, edgecolor='0.8', legend=False)
+                ax.set_title("Sentiment Preview", fontsize=10)
+                ax.axis('off')
+                st.pyplot(fig)
+                plt.close(fig)
     st.write("Select a dataset and visualization to proceed.")
 
 # =========================
@@ -567,32 +578,20 @@ with st.sidebar:
 def combined_prediction_page():
     st.title("Tweet Sentiment and Emotion Predictor")
     cleaner = MemoryOptimizedTweetCleaner()
-
-    # Single text box for tweet input
     tweet = st.text_area("Write a tweet:", key="tweet_input_combined")
-
-    # Predict button
     if st.button("Predict"):
         if tweet.strip():
-            # Clean the tweet
             cleaned_tweet = cleaner.clean_text(tweet)
             if cleaned_tweet:
-                # Predict sentiment with confidence
                 sentiment_vec = sentiment_vectorizer.transform([cleaned_tweet])
                 sentiment_prediction = sentiment_model.predict(sentiment_vec)[0]
                 sentiment_proba = sentiment_model.predict_proba(sentiment_vec)[0]
                 sentiment_conf = np.max(sentiment_proba)
                 sentiment_label_map = {-1: "Negative 😡", 0: "Neutral 😐", 1: "Positive 😊"}
-
-                # Predict emotion with confidence
                 emotion_vec = emotion_vectorizer.transform([cleaned_tweet])
                 emotion_prediction = emotion_model.predict(emotion_vec)[0]
                 emotion_proba = emotion_model.predict_proba(emotion_vec)[0]
                 emotion_conf = np.max(emotion_proba)
-                # Debug the raw prediction
-                st.write("Debug: Raw Emotion Prediction:", emotion_prediction)
-
-                # Updated emotion label map to handle string outputs (e.g., "joy", "anger")
                 emotion_label_map = {
                     "joy": "Joy 😊",
                     "anger": "Anger 😠",
@@ -600,12 +599,8 @@ def combined_prediction_page():
                     "fear": "Fear 😨",
                     "surprise": "Surprise 😲",
                     "neutral": "Neutral 😐"
-                }  # Adjust based on your model's actual output classes
-
-                # Get emotion label, with fallback for unknown predictions
+                }
                 emotion_label = emotion_label_map.get(emotion_prediction, f"Unknown Emotion ({emotion_prediction})")
-
-                # Display results
                 st.write("Cleaned Tweet:", cleaned_tweet)
                 st.write(f"Sentiment Prediction: {sentiment_label_map[sentiment_prediction]} (Confidence: {sentiment_conf:.2f})")
                 st.write(f"Emotion Prediction: {emotion_label} (Confidence: {emotion_conf:.2f})")
@@ -652,15 +647,13 @@ def main():
                 st.session_state['loaded_incident'] = {}
 
             if tab_choice in ["📈 Sentiment Pie", "😄 Emotion Pie", "🗺 Sentiment Map", "🗺 Emotion Map", "📊 Advanced Visualizations", "💰 Average Median Income by Borough"]:
-                if dataset_choice not in st.session_state['loaded_data']:
-                    with st.spinner(f"Loading {dataset_choice} dataset..."):
-                        st.session_state['loaded_data'][dataset_choice] = load_data(dataset_choice)
-                df = st.session_state['loaded_data'][dataset_choice]
+                df = load_data(dataset_choice)
+                if df is None:
+                    return
             elif tab_choice in ["🗺 ZIP Code Sentiment Maps", "🗺 ZIP Code Sentiment Heatmap"]:
-                if dataset_choice not in st.session_state['loaded_incident']:
-                    with st.spinner(f"Loading {dataset_choice} incident data..."):
-                        st.session_state['loaded_incident'][dataset_choice] = load_incident_data(dataset_choice)
-                incident_df = st.session_state['loaded_incident'][dataset_choice]
+                incident_df = load_incident_data(dataset_choice)
+                if incident_df is None:
+                    return
                 nyc_gdf = load_shapefile()
 
             if tab_choice == "📈 Sentiment Pie":
