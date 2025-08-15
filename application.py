@@ -90,11 +90,11 @@ def download_from_drive(file_id, output_path: Path):
                 raise ValueError(f"Download failed: {output_path.name} is empty or missing.")
         except Exception as e:
             logger.error(f"Failed to download {output_path.name}: {e}")
-            st.error(f"Failed to download required file: {output_path.name}. Please check the file ID and permissions.")
-            st.stop()
+            raise RuntimeError(f"Download failed for {output_path.name}") from e
 
+# Refactored to remove Streamlit calls from the cached function
 @st.cache_resource
-def load_all_models():
+def load_all_models_cached():
     """Loads all models and vectorizers from Google Drive into memory."""
     try:
         paths = {}
@@ -112,14 +112,7 @@ def load_all_models():
         return sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer
     except Exception as e:
         logger.error(f"Failed to load ML resources: {e}")
-        st.error(f"An error occurred while loading the machine learning models. "
-                 "This often happens due to incompatible library versions. "
-                 "Please ensure your environment matches the one used to save the models.")
-        st.error(f"Traceback: {e}")
-        st.stop()
-
-# Load models once at the start. These are small enough to stay in memory.
-sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer = load_all_models()
+        return None, None, None, None # Return tuple of None on failure
 
 # Emoticon map
 EMOTICON_MAP = {
@@ -622,7 +615,7 @@ def main():
 
 
 if __name__ == '__main__':
-    # THIS MUST BE THE FIRST STREAMLIT COMMAND
+    # ❗️ IMPORTANT: This must be the very first Streamlit command.
     st.set_page_config(
         page_title="Twitter Sentiment Analysis",
         page_icon="🐦",
@@ -630,9 +623,23 @@ if __name__ == '__main__':
         initial_sidebar_state="expanded"
     )
 
-    # All other st. commands must come after this.
+    # Now, load the models AFTER the page configuration.
+    sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer = load_all_models_cached()
+    
+    # Check if models loaded successfully
+    if sentiment_model is None:
+        st.error("Failed to load machine learning models. Please check your internet connection or the provided file IDs.")
+        st.stop()
+        
     st.sidebar.title("Navigation")
     page = st.sidebar.radio("Go to:", ["📊 Sentiment Analysis Dashboard", "🔍 Combined Prediction"], key='page_selector')
 
-    # ... rest of your code
-
+    # Use session state to manage page navigation and clear data when switching
+    if st.session_state.get('last_page') != page:
+        st.session_state.clear()
+        st.session_state.last_page = page
+        
+    if page == "📊 Sentiment Analysis Dashboard":
+        main()
+    elif page == "🔍 Combined Prediction":
+        combined_prediction_page()
