@@ -118,7 +118,6 @@ def load_all_models():
         st.error(f"Traceback: {e}")
         st.stop()
 
-
 # Load models once at the start. These are small enough to stay in memory.
 sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer = load_all_models()
 
@@ -623,13 +622,14 @@ def main():
 
 
 if __name__ == '__main__':
+    # ❗️ IMPORTANT: This must be the very first Streamlit command.
     st.set_page_config(
         page_title="Twitter Sentiment Analysis",
         page_icon="🐦",
         layout="wide",
         initial_sidebar_state="expanded"
     )
-    
+
     st.sidebar.title("Navigation")
     page = st.sidebar.radio("Go to:", ["📊 Sentiment Analysis Dashboard", "🔍 Combined Prediction"], key='page_selector')
 
