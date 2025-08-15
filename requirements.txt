@@ -4,7 +4,8 @@ pandas==2.2.3
 
 # Core data processing, machine learning, and utilities
 numpy==1.26.4
-scikit-learn==1.4.2
+scikit-learn==1.5.0
+
 joblib==1.4.2
 tqdm==4.66.4
 psutil==5.9.8
@@ -30,3 +31,4 @@ fiona==1.9.6
 
 # For Streamlit custom components (if needed)
 streamlit-plotly-events==0.0.6
+
