@@ -27,7 +27,5 @@ streamlit-folium==0.19.1
 geopy==2.4.1
 shapely==2.0.4
 fiona==1.9.6
-gdal==3.8.5
-
-# For Streamlit custom components (if needed)
+gdal==3.9.1  # <-- Updated to a version with a known Python 3.13 wheel
 streamlit-plotly-events==0.0.4
