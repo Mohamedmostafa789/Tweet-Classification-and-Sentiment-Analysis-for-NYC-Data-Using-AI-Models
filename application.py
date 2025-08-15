@@ -611,8 +611,7 @@ def main():
         elif visualization_choice == "📊 Advanced Visualizations": advanced_visualizations(st.session_state.df)
         elif visualization_choice == "🗺 ZIP Code Sentiment Maps": zip_code_maps(st.session_state.incident_df, st.session_state.nyc_gdf)
         elif visualization_choice == "🗺 ZIP Code Sentiment Heatmap": zip_code_heatmap(st.session_state.incident_df, st.session_state.nyc_gdf)
-        elif visualization_choice == "💰 Average Median Income by Borough": borough_income_chart(st.session_state.incident_df)
-
+        elif visualization_choice == "💰 Average Median Income by Borough": borough_income_chart(st.session_state.df)
 
 if __name__ == '__main__':
     # ❗️ IMPORTANT: This must be the very first Streamlit command.
@@ -643,3 +642,4 @@ if __name__ == '__main__':
         main()
     elif page == "🔍 Combined Prediction":
         combined_prediction_page()
+
