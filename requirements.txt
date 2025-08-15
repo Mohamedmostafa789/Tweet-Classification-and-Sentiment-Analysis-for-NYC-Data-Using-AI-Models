@@ -29,4 +29,4 @@ shapely==2.0.4
 fiona==1.9.6
 
 # For Streamlit custom components (if needed)
-streamlit-plotly-events==0.0.4
+streamlit-plotly-events==0.0.6
