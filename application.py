@@ -68,13 +68,12 @@ INCIDENT_FILES = {
     "Politics": {"id": "1uNxIYzSY7cbgbuTc8zo0QYc5Dn5Ny2W_", "name": "Incident Zip_politics_classified.csv"}
 }
 
-# IMPORTANT: You must update these IDs with the new ones from your re-saved models
-# as per the previous instructions.
+# The Google Drive IDs have been updated with the new links you provided.
 MODEL_FILES = {
-    "sentiment_model": {"id": "1n4gNdUvGBsuY6Lnww2BCiNRG1JWqtJfI", "name": "sentiment_model_large.pkl"},
-    "sentiment_vectorizer": {"id": "14ulBamgsHTOg-Fy-cU53aj8K879gmUcv", "name": "vectorizer_large.pkl"},
-    "emotion_model": {"id": "1jtWOqaOLZQO9lj32MQTgPh4MTkHRiMQN", "name": "emotion_model_large.pkl"},
-    "emotion_vectorizer": {"id": "14FjtUTnRmz4tK1IpxlYT_5s8cmz2DTQR", "name": "emotion_vectorizer_large.pkl"}
+    "sentiment_model": {"id": "1lzZf79LGcB1J5SQsMh_mi1Jv_8V2q6K9", "name": "sentiment_model_large.pkl"},
+    "sentiment_vectorizer": {"id": "12wRG57vERpdKgCaTiNyLiWC71KLWABK8", "name": "vectorizer_large.pkl"},
+    "emotion_model": {"id": "1NZCZKMhTSKvFJMuW_kxmX1OrkEQLFgs0", "name": "emotion_model_large.pkl"},
+    "emotion_vectorizer": {"id": "1TKR2xmNcouAb8XyQz6VANixFLNZ9YsJV", "name": "emotion_vectorizer_large.pkl"}
 }
 
 SHAPE_FILES = [
