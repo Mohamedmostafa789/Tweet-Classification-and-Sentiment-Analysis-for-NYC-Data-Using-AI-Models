@@ -509,32 +509,57 @@ def borough_income_chart(df):
     plt.close(fig)
 
 # Sidebar with heatmap preview
+# Sidebar with heatmap preview
 with st.sidebar:
     st.title("Navigation")
-    dataset_choice = st.selectbox("Select Dataset for Preview", list(DATASET_FILES.keys()), index=None, placeholder="Choose a dataset", key="preview_dataset_choice")
-    if dataset_choice:
-        with st.spinner(f"Loading preview data for {dataset_choice}..."):
-            try:
-                incident_df = load_incident_data(dataset_choice)
-                nyc_gdf = load_shapefile()
-                incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
-                incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
-                incident_sums['combined_sentiment'] = (incident_sums['positive'] - incident_sums['negative']) / incident_sums['total'].replace(0, 1)
-                merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
-                merged_gdf['combined_sentiment'] = merged_gdf['combined_sentiment'].fillna(0)
-                fig, ax = plt.subplots(1, 1, figsize=(5, 4))
-                merged_gdf.plot(column='combined_sentiment', cmap='RdYlBu_r', linewidth=0.4, ax=ax, edgecolor='0.8', legend=False)
-                ax.set_title("Sentiment Preview", fontsize=10)
-                ax.axis('off')
-                st.pyplot(fig)
-                plt.close(fig)
-                del incident_df, nyc_gdf, incident_sums, merged_gdf
-                gc.collect()
-            except Exception as e:
-                st.error(f"Failed to generate preview: {e}")
-                logger.error(f"Failed to generate preview: {e}")
-                
-    st.write("Select a dataset and visualization to proceed.")
+    
+    # Use a button to trigger the preview
+    st.markdown("---")
+    st.subheader("Preview Sentiment Map")
+    preview_dataset_choice = st.selectbox(
+        "Select Dataset for Preview", 
+        list(DATASET_FILES.keys()), 
+        index=None, 
+        placeholder="Choose a dataset", 
+        key="preview_dataset_choice"
+    )
+    
+    if st.button("Generate Preview"):
+        if preview_dataset_choice:
+            with st.spinner(f"Loading preview for {preview_dataset_choice}..."):
+                try:
+                    # These lines now only run when the button is clicked
+                    incident_df = load_incident_data(preview_dataset_choice)
+                    nyc_gdf = load_shapefile()
+                    
+                    # Generate the preview heatmap
+                    incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
+                    incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
+                    incident_sums['combined_sentiment'] = (incident_sums['positive'] - incident_sums['negative']) / incident_sums['total'].replace(0, 1)
+                    merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
+                    merged_gdf['combined_sentiment'] = merged_gdf['combined_sentiment'].fillna(0)
+                    
+                    fig, ax = plt.subplots(1, 1, figsize=(5, 4))
+                    merged_gdf.plot(column='combined_sentiment', cmap='RdYlBu_r', linewidth=0.4, ax=ax, edgecolor='0.8', legend=False)
+                    ax.set_title("Sentiment Preview", fontsize=10)
+                    ax.axis('off')
+                    st.pyplot(fig)
+                    plt.close(fig)
+                    
+                    # Explicitly delete objects to free up memory
+                    del incident_df, nyc_gdf, incident_sums, merged_gdf, fig, ax
+                    gc.collect()
+                    
+                except Exception as e:
+                    st.error(f"Failed to generate preview: {e}")
+                    logger.error(f"Failed to generate preview: {e}")
+        else:
+            st.warning("Please select a dataset to generate a preview.")
+
+    st.markdown("---")
+    st.write("Select a page and options to proceed.")
+
+# ... (rest of your main() function and other code remains the same)
 
 # =========================
 # Combined Prediction Page
@@ -664,3 +689,4 @@ if __name__ == '__main__':
     if 'current_tab' not in st.session_state:
         st.session_state.current_tab = None
     main()
+
