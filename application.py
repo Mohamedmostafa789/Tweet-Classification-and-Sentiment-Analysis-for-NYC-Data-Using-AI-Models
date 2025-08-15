@@ -622,7 +622,7 @@ def main():
 
 
 if __name__ == '__main__':
-    # ❗️ IMPORTANT: This must be the very first Streamlit command.
+    # THIS MUST BE THE FIRST STREAMLIT COMMAND
     st.set_page_config(
         page_title="Twitter Sentiment Analysis",
         page_icon="🐦",
@@ -630,15 +630,9 @@ if __name__ == '__main__':
         initial_sidebar_state="expanded"
     )
 
+    # All other st. commands must come after this.
     st.sidebar.title("Navigation")
     page = st.sidebar.radio("Go to:", ["📊 Sentiment Analysis Dashboard", "🔍 Combined Prediction"], key='page_selector')
 
-    # Use session state to manage page navigation and clear data when switching
-    if st.session_state.get('last_page') != page:
-        st.session_state.clear()
-        st.session_state.last_page = page
-        
-    if page == "📊 Sentiment Analysis Dashboard":
-        main()
-    elif page == "🔍 Combined Prediction":
-        combined_prediction_page()
+    # ... rest of your code
+
