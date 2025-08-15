@@ -39,15 +39,7 @@ logger = logging.getLogger(__name__)
 MAX_POINTS_MAP = 5000
 MAX_POINTS_SCATTER = 20000
 
-st.set_page_config(
-    page_title="Twitter Sentiment Analysis",
-    page_icon="🐦",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
 # Use a persistent directory for files to avoid re-downloading on every run in some environments
-# On Streamlit Cloud, this will be in a persistent cache.
 DATA_DIR = Path(tempfile.gettempdir()) / "app_data"
 SHAPE_DIR = DATA_DIR / "shapefiles"
 SHAPEFILE_PATH = SHAPE_DIR / "tl_2020_us_zcta510.shp"
@@ -68,7 +60,6 @@ INCIDENT_FILES = {
     "Politics": {"id": "1uNxIYzSY7cbgbuTc8zo0QYc5Dn5Ny2W_", "name": "Incident Zip_politics_classified.csv"}
 }
 
-# The Google Drive IDs have been updated with the new links you provided.
 MODEL_FILES = {
     "sentiment_model": {"id": "1lzZf79LGcB1J5SQsMh_mi1Jv_8V2q6K9", "name": "sentiment_model_large.pkl"},
     "sentiment_vectorizer": {"id": "12wRG57vERpdKgCaTiNyLiWC71KLWABK8", "name": "vectorizer_large.pkl"},
@@ -86,6 +77,7 @@ SHAPE_FILES = [
     {"id": "19vKnJ0RH5wr8GZFeuNbJSpaABo5x3ukJ", "name": "tl_2020_us_zcta510.shp.iso.xml"}
 ]
 
+# -------------------- HELPER FUNCTIONS --------------------
 
 def download_from_drive(file_id, output_path: Path):
     """Downloads a file from Google Drive if it doesn't exist."""
@@ -508,59 +500,6 @@ def borough_income_chart(df):
     st.pyplot(fig)
     plt.close(fig)
 
-# Sidebar with heatmap preview
-# Sidebar with heatmap preview
-with st.sidebar:
-    st.title("Navigation")
-    
-    # Use a button to trigger the preview
-    st.markdown("---")
-    st.subheader("Preview Sentiment Map")
-    preview_dataset_choice = st.selectbox(
-        "Select Dataset for Preview", 
-        list(DATASET_FILES.keys()), 
-        index=None, 
-        placeholder="Choose a dataset", 
-        key="preview_dataset_choice"
-    )
-    
-    if st.button("Generate Preview"):
-        if preview_dataset_choice:
-            with st.spinner(f"Loading preview for {preview_dataset_choice}..."):
-                try:
-                    # These lines now only run when the button is clicked
-                    incident_df = load_incident_data(preview_dataset_choice)
-                    nyc_gdf = load_shapefile()
-                    
-                    # Generate the preview heatmap
-                    incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
-                    incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
-                    incident_sums['combined_sentiment'] = (incident_sums['positive'] - incident_sums['negative']) / incident_sums['total'].replace(0, 1)
-                    merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
-                    merged_gdf['combined_sentiment'] = merged_gdf['combined_sentiment'].fillna(0)
-                    
-                    fig, ax = plt.subplots(1, 1, figsize=(5, 4))
-                    merged_gdf.plot(column='combined_sentiment', cmap='RdYlBu_r', linewidth=0.4, ax=ax, edgecolor='0.8', legend=False)
-                    ax.set_title("Sentiment Preview", fontsize=10)
-                    ax.axis('off')
-                    st.pyplot(fig)
-                    plt.close(fig)
-                    
-                    # Explicitly delete objects to free up memory
-                    del incident_df, nyc_gdf, incident_sums, merged_gdf, fig, ax
-                    gc.collect()
-                    
-                except Exception as e:
-                    st.error(f"Failed to generate preview: {e}")
-                    logger.error(f"Failed to generate preview: {e}")
-        else:
-            st.warning("Please select a dataset to generate a preview.")
-
-    st.markdown("---")
-    st.write("Select a page and options to proceed.")
-
-# ... (rest of your main() function and other code remains the same)
-
 # =========================
 # Combined Prediction Page
 # =========================
@@ -581,7 +520,6 @@ def combined_prediction_page():
                 emotion_prediction = emotion_model.predict(emotion_vec)[0]
                 emotion_proba = emotion_model.predict_proba(emotion_vec)[0]
                 emotion_conf = np.max(emotion_proba)
-                st.write("Debug: Raw Emotion Prediction:", emotion_prediction)
                 emotion_label_map = {
                     "joy": "Joy 😊", "anger": "Anger 😠", "sadness": "Sadness 😢",
                     "fear": "Fear 😨", "surprise": "Surprise 😲", "neutral": "Neutral 😐"
@@ -595,98 +533,112 @@ def combined_prediction_page():
                 st.write("Prediction: Unable to predict (invalid or empty tweet after cleaning)")
         else:
             st.write("Please enter a tweet to predict.")
+            
+# =========================
+# MAIN APP LOGIC
+# =========================
 
-# =========================
-# MAIN APP
-# =========================
 def main():
-    if 'current_dataset' not in st.session_state:
-        st.session_state.current_dataset = None
-    if 'current_tab' not in st.session_state:
-        st.session_state.current_tab = None
+    st.title("🐦 Twitter Sentiment Analysis Dashboard")
+    st.markdown("---")
 
-    # Main page selectors
-    page = st.sidebar.radio("Choose a Page", ["📊 Sentiment Analysis Dashboard", "🔍 Combined Prediction"])
+    # Initialize session state for all dataframes and user selections
+    if 'df' not in st.session_state:
+        st.session_state['df'] = None
+    if 'incident_df' not in st.session_state:
+        st.session_state['incident_df'] = None
+    if 'nyc_gdf' not in st.session_state:
+        st.session_state['nyc_gdf'] = None
+    if 'current_dataset_choice' not in st.session_state:
+        st.session_state['current_dataset_choice'] = None
 
-    if page == "📊 Sentiment Analysis Dashboard":
-        # Check if dataset has changed to clear state
-        new_dataset_choice = st.sidebar.selectbox("Select Dataset", list(DATASET_FILES.keys()), index=0, placeholder="Choose a dataset")
-        if new_dataset_choice != st.session_state.current_dataset:
-            st.session_state.current_dataset = new_dataset_choice
-            st.session_state.data_loaded = {}
-            st.session_state.incident_loaded = {}
-            st.session_state.shapefile_loaded = False
-            # Clear all cached data
-            st.cache_data.clear()
-            gc.collect()
-
-        # Check if tab has changed to clear state
-        new_tab_choice = st.sidebar.radio("Choose Visualization", [
-            "📈 Sentiment Pie", 
-            "😄 Emotion Pie", 
-            "🗺 Sentiment Map", 
-            "🗺 Emotion Map",
-            "📊 Advanced Visualizations",
-            "🗺 ZIP Code Sentiment Maps",
-            "🗺 ZIP Code Sentiment Heatmap",
-            "💰 Average Median Income by Borough"
-        ])
-
-        df, incident_df, nyc_gdf = None, None, None
-
-        # Load only what is needed based on the selected tab and dataset
-        if new_tab_choice in ["📈 Sentiment Pie", "😄 Emotion Pie", "🗺 Sentiment Map", "🗺 Emotion Map", "📊 Advanced Visualizations", "💰 Average Median Income by Borough"]:
-            with st.spinner(f"Loading {st.session_state.current_dataset} dataset..."):
-                df = load_data(st.session_state.current_dataset)
-                # Clear other large data to save memory
-                if 'incident_loaded' in st.session_state:
-                    del st.session_state.incident_loaded
-                if st.session_state.shapefile_loaded:
-                    st.session_state.shapefile_loaded = False
+    # Sidebar for data selection and loading
+    st.sidebar.title("Data and View Options")
+    
+    # User selects a dataset
+    dataset_choice = st.sidebar.selectbox(
+        "Select a dataset to load:", 
+        list(DATASET_FILES.keys()),
+        index=None,
+        placeholder="Choose a dataset"
+    )
+    
+    # Load button
+    if st.sidebar.button("Load Dataset"):
+        if dataset_choice:
+            # Clear old data and cache if a new dataset is selected
+            if dataset_choice != st.session_state.get('current_dataset_choice'):
+                st.session_state['current_dataset_choice'] = dataset_choice
+                st.session_state['df'] = None
+                st.session_state['incident_df'] = None
+                st.session_state['nyc_gdf'] = None
+                st.cache_data.clear()
                 gc.collect()
 
-        if new_tab_choice in ["🗺 ZIP Code Sentiment Maps", "🗺 ZIP Code Sentiment Heatmap", "💰 Average Median Income by Borough"]:
-            with st.spinner(f"Loading {st.session_state.current_dataset} incident data..."):
-                incident_df = load_incident_data(st.session_state.current_dataset)
-                # Clear other large data to save memory
-                if 'data_loaded' in st.session_state:
-                    del st.session_state.data_loaded
-                gc.collect()
+            # Load data with informative spinners
+            with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
+                st.session_state['df'] = load_data(dataset_choice)
+            with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
+                st.session_state['incident_df'] = load_incident_data(dataset_choice)
+            st.success(f"Data for '{dataset_choice}' has been loaded!")
+        else:
+            st.sidebar.warning("Please select a dataset first.")
 
-        if new_tab_choice in ["🗺 ZIP Code Sentiment Maps", "🗺 ZIP Code Sentiment Heatmap"]:
-            with st.spinner("Loading geographic data..."):
-                nyc_gdf = load_shapefile()
-                st.session_state.shapefile_loaded = True
+    # Main dashboard logic after data is loaded
+    if st.session_state.df is None:
+        st.info("Please select a dataset from the sidebar and click 'Load Dataset' to begin.")
+    else:
+        # User selects visualization
+        st.sidebar.markdown("---")
+        visualization_choice = st.sidebar.radio(
+            "Choose a visualization:", 
+            [
+                "📈 Sentiment Pie", 
+                "😄 Emotion Pie", 
+                "🗺 Sentiment Map", 
+                "🗺 Emotion Map",
+                "📊 Advanced Visualizations",
+                "🗺 ZIP Code Sentiment Maps",
+                "🗺 ZIP Code Sentiment Heatmap",
+                "💰 Average Median Income by Borough"
+            ]
+        )
+        st.header(f"Visualizing: {st.session_state['current_dataset_choice']}")
 
-        st.title(f"Sentiment Analysis Dashboard - {st.session_state.current_dataset}")
-        
-        # Display the visualizations
-        if df is not None:
-            if new_tab_choice == "📈 Sentiment Pie": sentiment_pie_chart(df)
-            elif new_tab_choice == "😄 Emotion Pie": emotion_pie_chart(df)
-            elif new_tab_choice == "🗺 Sentiment Map": sentiment_map(df)
-            elif new_tab_choice == "🗺 Emotion Map": emotion_map(df)
-            elif new_tab_choice == "📊 Advanced Visualizations": advanced_visualizations(df)
-            elif new_tab_choice == "💰 Average Median Income by Borough": borough_income_chart(df)
-        elif incident_df is not None and nyc_gdf is not None:
-            if new_tab_choice == "🗺 ZIP Code Sentiment Maps": zip_code_maps(incident_df, nyc_gdf)
-            elif new_tab_choice == "🗺 ZIP Code Sentiment Heatmap": zip_code_heatmap(incident_df, nyc_gdf)
+        # Load geographic data only when needed for map visualizations
+        if visualization_choice in ["🗺 ZIP Code Sentiment Maps", "🗺 ZIP Code Sentiment Heatmap", "💰 Average Median Income by Borough"]:
+            if st.session_state.nyc_gdf is None:
+                with st.spinner("Loading geographic data..."):
+                    st.session_state['nyc_gdf'] = load_shapefile()
 
-    elif page == "🔍 Combined Prediction":
-        combined_prediction_page()
-        # Clear large dataframes when switching to this page
-        if 'data_loaded' in st.session_state:
-            del st.session_state.data_loaded
-        if 'incident_loaded' in st.session_state:
-            del st.session_state.incident_loaded
-        if st.session_state.shapefile_loaded:
-            st.session_state.shapefile_loaded = False
-        gc.collect()
+        # Display the chosen visualization
+        if visualization_choice == "📈 Sentiment Pie": sentiment_pie_chart(st.session_state.df)
+        elif visualization_choice == "😄 Emotion Pie": emotion_pie_chart(st.session_state.df)
+        elif visualization_choice == "🗺 Sentiment Map": sentiment_map(st.session_state.df)
+        elif visualization_choice == "🗺 Emotion Map": emotion_map(st.session_state.df)
+        elif visualization_choice == "📊 Advanced Visualizations": advanced_visualizations(st.session_state.df)
+        elif visualization_choice == "🗺 ZIP Code Sentiment Maps": zip_code_maps(st.session_state.incident_df, st.session_state.nyc_gdf)
+        elif visualization_choice == "🗺 ZIP Code Sentiment Heatmap": zip_code_heatmap(st.session_state.incident_df, st.session_state.nyc_gdf)
+        elif visualization_choice == "💰 Average Median Income by Borough": borough_income_chart(st.session_state.incident_df)
+
 
 if __name__ == '__main__':
-    if 'current_dataset' not in st.session_state:
-        st.session_state.current_dataset = None
-    if 'current_tab' not in st.session_state:
-        st.session_state.current_tab = None
-    main()
+    st.set_page_config(
+        page_title="Twitter Sentiment Analysis",
+        page_icon="🐦",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    st.sidebar.title("Navigation")
+    page = st.sidebar.radio("Go to:", ["📊 Sentiment Analysis Dashboard", "🔍 Combined Prediction"], key='page_selector')
 
+    # Use session state to manage page navigation and clear data when switching
+    if st.session_state.get('last_page') != page:
+        st.session_state.clear()
+        st.session_state.last_page = page
+        
+    if page == "📊 Sentiment Analysis Dashboard":
+        main()
+    elif page == "🔍 Combined Prediction":
+        combined_prediction_page()
