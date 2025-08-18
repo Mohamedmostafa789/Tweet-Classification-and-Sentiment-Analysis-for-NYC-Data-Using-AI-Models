@@ -553,7 +553,75 @@ def borough_income_chart(df):
     plt.close(fig)
     st.markdown("**Explanation:** This bar chart visualizes the average median income for each NYC borough based on the tweet data. It allows you to see the economic context of conversations in different parts of the city and compare them directly.")
 
+# New function: Top Hashtags Bar Chart
+def top_hashtags_bar_chart(df):
+    st.subheader("Top 10 Most Frequent Hashtags")
+    if 'hashtags' not in df.columns:
+        st.warning("Hashtag data not available for this dataset.")
+        return
+    
+    # Safely handle non-string values and split hashtags
+    all_hashtags = df['hashtags'].astype(str).str.split(',')
+    flat_hashtags = [item.strip().lower() for sublist in all_hashtags.dropna() for item in sublist]
+    
+    # Count frequency and get top 10
+    hashtag_counts = pd.Series(flat_hashtags).value_counts().head(10)
+    
+    # Plotting
+    fig, ax = plt.subplots(figsize=(12, 7))
+    sns.barplot(x=hashtag_counts.values, y=hashtag_counts.index, palette='viridis', ax=ax)
+    ax.set_title('Top 10 Most Frequent Hashtags', fontsize=18)
+    ax.set_xlabel('Count', fontsize=14)
+    ax.set_ylabel('Hashtag', fontsize=14)
+    plt.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("**Explanation:** This bar chart shows the 10 most used hashtags in the dataset. It provides a quick way to identify the most popular topics and trends within the conversation.")
 
+# New function: Tweet Length vs. Sentiment
+def tweet_length_vs_sentiment_boxplot(df):
+    st.subheader("Tweet Length vs. Sentiment")
+    if 'cleaned_tweet' not in df.columns or 'category' not in df.columns:
+        st.warning("Required 'cleaned_tweet' or 'category' data not available.")
+        return
+    
+    # Calculate tweet length and map categories to labels
+    df['tweet_length'] = df['cleaned_tweet'].astype(str).apply(len)
+    sentiment_map = {1: 'Positive', 0: 'Neutral', -1: 'Negative'}
+    df['sentiment_label'] = df['category'].map(sentiment_map)
+    
+    fig, ax = plt.subplots(figsize=(12, 7))
+    sns.boxplot(x='sentiment_label', y='tweet_length', data=df, ax=ax, palette='Set2')
+    ax.set_title('Tweet Length Distribution by Sentiment', fontsize=18)
+    ax.set_xlabel('Sentiment', fontsize=14)
+    ax.set_ylabel('Tweet Length (characters)', fontsize=14)
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("**Explanation:** This box plot helps us understand if there's a relationship between the length of a tweet and its sentiment. For example, are negative tweets typically shorter and more direct, or are positive tweets longer and more descriptive?")
+    
+# New function: Emotion Trends over time
+def emotion_trends_line_chart(df):
+    st.subheader("Emotion Trends Over Time")
+    if 'date' not in df.columns or 'emotion' not in df.columns:
+        st.warning("Required 'date' or 'emotion' data not available.")
+        return
+
+    # Count emotions per day
+    emotion_over_time = df.groupby([df['date'].dt.date, 'emotion']) \
+                                 .size().unstack(fill_value=0)
+    
+    fig, ax = plt.subplots(figsize=(14, 7))
+    for col in emotion_over_time.columns:
+        ax.plot(emotion_over_time.index, emotion_over_time[col], label=col, linewidth=2)
+    ax.legend(title='Emotion', fontsize=12)
+    ax.set_title('Emotion Trends Over Time', fontsize=18)
+    ax.set_xlabel('Date', fontsize=14)
+    ax.set_ylabel('Number of Tweets', fontsize=14)
+    plt.xticks(rotation=45, ha='right')
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("**Explanation:** This chart visualizes how the frequency of different emotions changes over time. Unlike the sentiment chart, this gives you a more nuanced look at the emotional landscape of the data, showing how 'joy' or 'fear' might spike on specific days.")
+    
 def combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer):
     st.title("Tweet Sentiment and Emotion Predictor")
     cleaner = MemoryOptimizedTweetCleaner()
@@ -674,7 +742,10 @@ def main():
                         "Emotion Confidence Box Plot",
                         "Median Income Histogram",
                         "Sentiment Trends Line Chart",
-                        "Emotion vs Sentiment Heatmap"
+                        "Emotion vs Sentiment Heatmap",
+                        "Top 10 Hashtags Bar Chart",
+                        "Tweet Length vs. Sentiment",
+                        "Emotion Trends Over Time"
                     ],
                     key="advanced_chart_selector"
                 )
@@ -691,6 +762,12 @@ def main():
                     sentiment_trends_line_chart(st.session_state.df)
                 elif advanced_chart_choice == "Emotion vs Sentiment Heatmap":
                     emotion_sentiment_heatmap(st.session_state.df)
+                elif advanced_chart_choice == "Top 10 Hashtags Bar Chart":
+                    top_hashtags_bar_chart(st.session_state.df)
+                elif advanced_chart_choice == "Tweet Length vs. Sentiment":
+                    tweet_length_vs_sentiment_boxplot(st.session_state.df)
+                elif advanced_chart_choice == "Emotion Trends Over Time":
+                    emotion_trends_line_chart(st.session_state.df)
             
             with tab_geo:
                 st.markdown("### Geographical Maps")
@@ -748,4 +825,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
