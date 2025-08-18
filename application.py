@@ -1,4 +1,4 @@
-import streamlit as st
+[⚠️ Suspicious Content] import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -9,16 +9,10 @@ import geopandas as gpd
 import joblib
 import re
 import logging
-import unicodedata
-from concurrent.futures import ThreadPoolExecutor
-from tqdm import tqdm
-import time
-import os
 import psutil
 import tempfile
 import gdown
 from pathlib import Path
-from queue import Queue
 import warnings
 from typing import Optional, Dict, List, Tuple
 import threading
@@ -90,7 +84,8 @@ def download_from_drive(file_id, output_path: Path):
                 raise ValueError(f"Download failed: {output_path.name} is empty or missing.")
         except Exception as e:
             logger.error(f"Failed to download {output_path.name}: {e}")
-            raise RuntimeError(f"Download failed for {output_path.name}") from e
+            st.error(f"Failed to download required file: {output_path.name}. Please check the provided file ID and your internet connection.")
+            st.stop()
 
 @st.cache_resource
 def load_all_models_cached():
@@ -111,9 +106,10 @@ def load_all_models_cached():
         return sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer
     except Exception as e:
         logger.error(f"Failed to load ML resources: {e}")
-        return None, None, None, None
+        st.error("Failed to load machine learning models. Please check your internet connection or the provided file IDs.")
+        st.stop()
 
-# Emoticon map
+# Emoticon map for tweet cleaning
 EMOTICON_MAP = {
     r":-?\)+": "smiling_face", r"=+\)": "smiling_face", r":-?D+": "laughing_face", r"x+D+": "laughing_face",
     r"\^_+\^": "happy_face", r"LOL+": "laughing", r":'-?D+": "tearful_laughter", r":-?\(+": "sad_face",
@@ -131,7 +127,6 @@ class MemoryOptimizedTweetCleaner:
     def __init__(self):
         self._compile_patterns()
         self.stats = {'processed': 0, 'cleaned': 0, 'dropped': 0, 'errors': 0}
-        self.lock = threading.Lock()
 
     def _compile_patterns(self):
         self.patterns = {
@@ -177,13 +172,6 @@ class MemoryOptimizedTweetCleaner:
         except Exception as e:
             logger.debug(f"Error cleaning text: {e}")
             return None
-
-    def update_stats(self, processed: int, cleaned: int, dropped: int, errors: int = 0):
-        with self.lock:
-            self.stats['processed'] += processed
-            self.stats['cleaned'] += cleaned
-            self.stats['dropped'] += dropped
-            self.stats['errors'] += errors
 
 class MemoryMonitor:
     @staticmethod
@@ -377,7 +365,6 @@ def sentiment_pie_chart(df):
     plt.close(fig)
     st.markdown("**Explanation:** This simple pie chart provides a clear and direct summary of the overall sentiment in the selected dataset. Each slice represents the percentage of tweets classified as positive, neutral, or negative, giving you a quick understanding of the dominant sentiment.")
 
-
 def emotion_pie_chart(df):
     st.subheader("Emotion Distribution")
     if 'emotion' not in df.columns or df['emotion'].isnull().all():
@@ -400,8 +387,8 @@ def sentiment_map(df):
     nyc_bbox = {'min_lon': -74.27, 'max_lon': -73.68, 'min_lat': 40.48, 'max_lat': 40.95}
     nyc_df = df[(df['longitude'].between(nyc_bbox['min_lon'], nyc_bbox['max_lon'])) &
                 (df['latitude'].between(nyc_bbox['min_lat'], nyc_bbox['max_lat']))]
-    sentiment_map = {-1: "Negative 🔴", 0: "Neutral 🟡", 1: "Positive 🟢"}
-    for cat, label in sentiment_map.items():
+    sentiment_map_colors = {-1: "Negative 🔴", 0: "Neutral 🟡", 1: "Positive 🟢"}
+    for cat, label in sentiment_map_colors.items():
         color = '#e74c3c' if cat == -1 else '#f39c12' if cat == 0 else '#2ecc71'
         sub_df = nyc_df[nyc_df['category'] == cat].sample(min(2000, len(nyc_df[nyc_df['category'] == cat])), random_state=42)
         st.write(f"### {label}")
@@ -411,7 +398,6 @@ def sentiment_map(df):
         fig.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
         st.plotly_chart(fig, use_container_width=True)
         st.markdown(f"**Explanation:** This map shows the geographical distribution of tweets with **{label.replace('🔴','').replace('🟡','').replace('🟢','').strip()}** sentiment. Each point is a tweet location, allowing you to see clusters of sentiment in different parts of New York City.")
-
 
 def emotion_map(df):
     st.subheader("Geographical Emotion Map (Sampled)")
@@ -433,7 +419,6 @@ def emotion_map(df):
             fig.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
             st.plotly_chart(fig, use_container_width=True)
             st.markdown(f"**Explanation:** This map shows the locations of tweets expressing **{label.replace('😊','').replace('😠','').replace('😢','').replace('😨','').strip()}**. It helps you identify which parts of the city are feeling a particular emotion most strongly.")
-
 
 def zip_code_maps(incident_df, nyc_gdf):
     st.subheader("ZIP Code Sentiment Maps")
@@ -510,7 +495,6 @@ def zip_code_maps(incident_df, nyc_gdf):
         plt.close(fig)
         
     st.markdown("**Explanation:** These maps display the sentiment of incidents at the ZIP code level. The 'Count' maps show the raw number of tweets per sentiment, while the 'Percentage' maps show the proportion. This is useful for identifying which neighborhoods are feeling the most strongly about a topic, regardless of population size.")
-
 
 def zip_code_heatmap(incident_df, nyc_gdf):
     st.subheader("ZIP Code Sentiment Heatmap")
@@ -599,9 +583,9 @@ def combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_mode
 
             else:
                 st.write("Cleaned Tweet: No valid content after cleaning")
-                st.write("Prediction: Unable to predict (invalid or empty tweet after cleaning)")
+                st.warning("Prediction: Unable to predict (invalid or empty tweet after cleaning)")
         else:
-            st.write("Please enter a tweet to predict.")
+            st.warning("Please enter a tweet to predict.")
             
 # =========================
 # MAIN APP LOGIC
@@ -616,156 +600,144 @@ def main():
 
     sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer = load_all_models_cached()
     
-    if sentiment_model is None:
-        st.error("Failed to load machine learning models. Please check your internet connection or the provided file IDs.")
-        st.stop()
-        
-    st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to:", ["📊 Sentiment Analysis Dashboard", "🔍 Combined Prediction"], key='page_selector')
+    st.title("🐦 Twitter Sentiment & Emotion Analysis App")
+    st.markdown("This application analyzes Twitter data to visualize sentiment and emotions related to different topics.")
+    
+    # Use tabs for a cleaner user experience
+    tab1, tab2 = st.tabs(["📊 Dashboard", "🔍 Predictor"])
 
-    if st.session_state.get('last_page') != page:
-        st.session_state.clear()
-        st.session_state.last_page = page
+    with tab1:
+        st.subheader("Dashboard")
+        if 'df' not in st.session_state:
+            st.session_state['df'] = None
+        if 'incident_df' not in st.session_state:
+            st.session_state['incident_df'] = None
+        if 'nyc_gdf' not in st.session_state:
+            st.session_state['nyc_gdf'] = None
+        if 'current_dataset_choice' not in st.session_state:
+            st.session_state['current_dataset_choice'] = None
+
+        with st.container(border=True):
+            st.subheader("1. Load Data")
+            dataset_choice = st.selectbox(
+                "Select a dataset to load:", 
+                list(DATASET_FILES.keys()),
+                index=None,
+                placeholder="Choose a dataset"
+            )
+            
+            if st.button("Load Dataset"):
+                if dataset_choice:
+                    if dataset_choice != st.session_state.get('current_dataset_choice'):
+                        st.session_state.clear()
+                        st.session_state['current_dataset_choice'] = dataset_choice
+                        st.cache_data.clear()
+                        gc.collect()
+
+                    with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
+                        st.session_state['df'] = load_data(dataset_choice)
+                    with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
+                        st.session_state['incident_df'] = load_incident_data(dataset_choice)
+                    st.success(f"Data for '{dataset_choice}' has been loaded!")
+                else:
+                    st.warning("Please select a dataset first.")
         
-    if page == "📊 Sentiment Analysis Dashboard":
-        dashboard_page()
-    elif page == "🔍 Combined Prediction":
+        if st.session_state.get('df') is None:
+            st.info("Please select a dataset above and click 'Load Dataset' to begin visualizing the data.")
+        else:
+            st.header(f"Visualizing: {st.session_state['current_dataset_choice']} Data")
+            
+            # Use nested tabs for better organization
+            tab_basic, tab_advanced, tab_geo, tab_statistical, tab_summary = st.tabs([
+                "Basic Visualizations", 
+                "Advanced Charts", 
+                "Geographical Maps",
+                "Geo-Statistical Maps",
+                "Data Summary"
+            ])
+
+            with tab_basic:
+                st.markdown("### Basic Visualizations")
+                sentiment_pie_chart(st.session_state.df)
+                emotion_pie_chart(st.session_state.df)
+
+            with tab_advanced:
+                st.markdown("### Advanced Visualizations")
+                st.markdown("These charts provide deeper insights into the relationships between different data points.")
+                
+                advanced_chart_choice = st.selectbox(
+                    "Select an advanced chart to display:",
+                    [
+                        "Top Emotions Pie Chart",
+                        "Emotion by Sentiment Bar Chart",
+                        "Emotion Confidence Box Plot",
+                        "Median Income Histogram",
+                        "Sentiment Trends Line Chart",
+                        "Emotion vs Sentiment Heatmap"
+                    ],
+                    key="advanced_chart_selector"
+                )
+
+                if advanced_chart_choice == "Top Emotions Pie Chart":
+                    top_emotions_pie_chart(st.session_state.df)
+                elif advanced_chart_choice == "Emotion by Sentiment Bar Chart":
+                    emotion_sentiment_bar_chart(st.session_state.df)
+                elif advanced_chart_choice == "Emotion Confidence Box Plot":
+                    emotion_confidence_boxplot(st.session_state.df)
+                elif advanced_chart_choice == "Median Income Histogram":
+                    median_income_histogram(st.session_state.df)
+                elif advanced_chart_choice == "Sentiment Trends Line Chart":
+                    sentiment_trends_line_chart(st.session_state.df)
+                elif advanced_chart_choice == "Emotion vs Sentiment Heatmap":
+                    emotion_sentiment_heatmap(st.session_state.df)
+            
+            with tab_geo:
+                st.markdown("### Geographical Maps")
+                geo_map_choice = st.selectbox(
+                    "Select a map to view:", 
+                    ["Tweet Sentiment Map", "Tweet Emotion Map", "Geographical Sentiment Scatter Plot"],
+                    key="geo_map_selector"
+                )
+                
+                if geo_map_choice == "Tweet Sentiment Map":
+                    sentiment_map(st.session_state.df)
+                elif geo_map_choice == "Tweet Emotion Map":
+                    emotion_map(st.session_state.df)
+                elif geo_map_choice == "Geographical Sentiment Scatter Plot":
+                    geo_sentiment_scatterplot(st.session_state.df)
+
+            with tab_statistical:
+                if st.session_state.get('nyc_gdf') is None:
+                    with st.spinner("Loading geographic data..."):
+                        st.session_state['nyc_gdf'] = load_shapefile()
+                
+                st.markdown("### Geo-Statistical Maps")
+                st.markdown("These maps combine tweet data with geographic information at the ZIP code level.")
+                geo_statistical_map_choice = st.selectbox(
+                    "Select a map:", 
+                    ["ZIP Code Sentiment Maps", "ZIP Code Sentiment Heatmap", "Average Median Income by Borough"],
+                    key="geo_statistical_map_selector"
+                )
+                
+                if geo_statistical_map_choice == "ZIP Code Sentiment Maps":
+                    zip_code_maps(st.session_state.incident_df, st.session_state.nyc_gdf)
+                elif geo_statistical_map_choice == "ZIP Code Sentiment Heatmap":
+                    zip_code_heatmap(st.session_state.incident_df, st.session_state.nyc_gdf)
+                elif geo_statistical_map_choice == "Average Median Income by Borough":
+                    borough_income_chart(st.session_state.df)
+
+            with tab_summary:
+                st.header("Dataset Summary")
+                st.markdown("This section provides a quick look at the raw data and its structure.")
+                st.subheader("Data at a glance:")
+                st.write(st.session_state.df.head())
+                st.subheader("Dataset Shape:")
+                st.write(f"Rows: {st.session_state.df.shape[0]:,}")
+                st.write(f"Columns: {st.session_state.df.shape[1]}")
+
+    with tab2:
         combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer)
 
-def dashboard_page():
-    st.title("🐦 Twitter Sentiment Analysis Dashboard")
-    st.markdown("---")
-
-    if 'df' not in st.session_state:
-        st.session_state['df'] = None
-    if 'incident_df' not in st.session_state:
-        st.session_state['incident_df'] = None
-    if 'nyc_gdf' not in st.session_state:
-        st.session_state['nyc_gdf'] = None
-    if 'current_dataset_choice' not in st.session_state:
-        st.session_state['current_dataset_choice'] = None
-
-    with st.container(border=True):
-        st.subheader("1. Load Data")
-        dataset_choice = st.selectbox(
-            "Select a dataset to load:", 
-            list(DATASET_FILES.keys()),
-            index=None,
-            placeholder="Choose a dataset"
-        )
-        
-        if st.button("Load Dataset"):
-            if dataset_choice:
-                if dataset_choice != st.session_state.get('current_dataset_choice'):
-                    st.session_state['current_dataset_choice'] = dataset_choice
-                    st.session_state['df'] = None
-                    st.session_state['incident_df'] = None
-                    st.session_state['nyc_gdf'] = None
-                    st.cache_data.clear()
-                    gc.collect()
-
-                with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
-                    st.session_state['df'] = load_data(dataset_choice)
-                with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
-                    st.session_state['incident_df'] = load_incident_data(dataset_choice)
-                st.success(f"Data for '{dataset_choice}' has been loaded!")
-            else:
-                st.warning("Please select a dataset first.")
-    
-    if st.session_state.df is None:
-        st.info("Please select a dataset above and click 'Load Dataset' to begin.")
-    else:
-        st.header(f"Visualizing: {st.session_state['current_dataset_choice']} Data")
-        
-        # Use tabs to organize visualizations
-        tab_basic, tab_advanced, tab_geo, tab_statistical, tab_summary = st.tabs([
-            "Basic Visualizations", 
-            "Advanced Charts", 
-            "Geographical Maps",
-            "Geo-Statistical Maps",
-            "Data Summary"
-        ])
-
-        with tab_basic:
-            st.markdown("### Basic Visualizations")
-            st.markdown("These visualizations provide a high-level summary of the dataset's sentiment and emotion distribution.")
-            sentiment_pie_chart(st.session_state.df)
-            emotion_pie_chart(st.session_state.df)
-
-        with tab_advanced:
-            st.markdown("### Advanced Visualizations")
-            st.markdown("These charts provide deeper insights into the relationships between different data points.")
-            
-            advanced_chart_choice = st.selectbox(
-                "Select an advanced chart to display:",
-                [
-                    "Top Emotions Pie Chart",
-                    "Emotion by Sentiment Bar Chart",
-                    "Emotion Confidence Box Plot",
-                    "Median Income Histogram",
-                    "Sentiment Trends Line Chart",
-                    "Emotion vs Sentiment Heatmap"
-                ],
-                key="advanced_chart_selector"
-            )
-
-            if advanced_chart_choice == "Top Emotions Pie Chart":
-                top_emotions_pie_chart(st.session_state.df)
-            elif advanced_chart_choice == "Emotion by Sentiment Bar Chart":
-                emotion_sentiment_bar_chart(st.session_state.df)
-            elif advanced_chart_choice == "Emotion Confidence Box Plot":
-                emotion_confidence_boxplot(st.session_state.df)
-            elif advanced_chart_choice == "Median Income Histogram":
-                median_income_histogram(st.session_state.df)
-            elif advanced_chart_choice == "Sentiment Trends Line Chart":
-                sentiment_trends_line_chart(st.session_state.df)
-            elif advanced_chart_choice == "Emotion vs Sentiment Heatmap":
-                emotion_sentiment_heatmap(st.session_state.df)
-        
-        with tab_geo:
-            st.markdown("### Geographical Maps")
-            st.markdown("These maps plot tweet locations to visualize sentiment and emotion across New York City.")
-            geo_map_choice = st.selectbox(
-                "Select a map to view:", 
-                ["Tweet Sentiment Map", "Tweet Emotion Map", "Geographical Sentiment Scatter Plot"],
-                key="geo_map_selector"
-            )
-            
-            if geo_map_choice == "Tweet Sentiment Map":
-                sentiment_map(st.session_state.df)
-            elif geo_map_choice == "Tweet Emotion Map":
-                emotion_map(st.session_state.df)
-            elif geo_map_choice == "Geographical Sentiment Scatter Plot":
-                geo_sentiment_scatterplot(st.session_state.df)
-
-        with tab_statistical:
-            if st.session_state.nyc_gdf is None:
-                with st.spinner("Loading geographic data..."):
-                    st.session_state['nyc_gdf'] = load_shapefile()
-            
-            st.markdown("### Geo-Statistical Maps")
-            st.markdown("These maps combine tweet data with geographic information at the ZIP code level.")
-            geo_statistical_map_choice = st.selectbox(
-                "Select a map:", 
-                ["ZIP Code Sentiment Maps", "ZIP Code Sentiment Heatmap", "Average Median Income by Borough"],
-                key="geo_statistical_map_selector"
-            )
-            
-            if geo_statistical_map_choice == "ZIP Code Sentiment Maps":
-                zip_code_maps(st.session_state.incident_df, st.session_state.nyc_gdf)
-            elif geo_statistical_map_choice == "ZIP Code Sentiment Heatmap":
-                zip_code_heatmap(st.session_state.incident_df, st.session_state.nyc_gdf)
-            elif geo_statistical_map_choice == "Average Median Income by Borough":
-                borough_income_chart(st.session_state.df)
-
-        with tab_summary:
-            st.header("Dataset Summary")
-            st.markdown("This section provides a quick look at the raw data and its structure.")
-            st.subheader("Data at a glance:")
-            st.write(st.session_state.df.head())
-            st.subheader("Dataset Shape:")
-            st.write(f"Rows: {st.session_state.df.shape[0]:,}")
-            st.write(f"Columns: {st.session_state.df.shape[1]}")
 
 if __name__ == '__main__':
     main()
