@@ -78,7 +78,7 @@ def download_from_drive(file_id, output_path: Path):
     """Downloads a file from Google Drive if it doesn't exist."""
     if not output_path.exists() or output_path.stat().st_size == 0:
         try:
-            gdown.download(id=file_id, output=str(output_path), quiet=False)
+            gdown.download(id=file_id, output=str(output_path), quiet=True, fuzzy=True)
             if output_path.exists() and output_path.stat().st_size > 0:
                 logger.info(f"Successfully downloaded {output_path.name}")
             else:
@@ -87,7 +87,7 @@ def download_from_drive(file_id, output_path: Path):
             logger.error(f"Failed to download {output_path.name}: {e}")
             st.error(f"Failed to download required file: {output_path.name}. Please check the provided file ID and your internet connection.")
             st.stop()
-
+            
 @st.cache_resource
 def load_all_models_cached():
     """Loads all models and vectorizers from Google Drive into memory."""
@@ -109,7 +109,7 @@ def load_all_models_cached():
         logger.error(f"Failed to load ML resources: {e}")
         st.error("Failed to load machine learning models. Please check your internet connection or the provided file IDs.")
         st.stop()
-
+    
 # Emoticon map for tweet cleaning
 EMOTICON_MAP = {
     r":-?\)+": "smiling_face", r"=+\)": "smiling_face", r":-?D+": "laughing_face", r"x+D+": "laughing_face",
@@ -628,33 +628,66 @@ def combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_mode
     tweet = st.text_area("Write a tweet:", key="tweet_input_combined")
     if st.button("Predict"):
         if tweet.strip():
-            cleaned_tweet = cleaner.clean_text(tweet)
-            if cleaned_tweet:
-                sentiment_vec = sentiment_vectorizer.transform([cleaned_tweet])
-                sentiment_prediction = sentiment_model.predict(sentiment_vec)[0]
-                sentiment_proba = sentiment_model.predict_proba(sentiment_vec)[0]
-                sentiment_conf = np.max(sentiment_proba)
-                sentiment_label_map = {-1: "Negative 😡", 0: "Neutral 😐", 1: "Positive 😊"}
-                emotion_vec = emotion_vectorizer.transform([cleaned_tweet])
-                emotion_prediction = emotion_model.predict(emotion_vec)[0]
-                emotion_proba = emotion_model.predict_proba(emotion_vec)[0]
-                emotion_conf = np.max(emotion_proba)
-                emotion_label_map = {
-                    "joy": "Joy 😊", "anger": "Anger 😠", "sadness": "Sadness 😢",
-                    "fear": "Fear 😨", "surprise": "Surprise 😲", "neutral": "Neutral 😐"
-                }
-                emotion_label = emotion_label_map.get(emotion_prediction, f"Unknown Emotion ({emotion_prediction})")
-                
-                st.markdown("### Prediction Results")
-                st.write(f"**Cleaned Tweet:** `{cleaned_tweet}`")
-                st.success(f"**Sentiment Prediction:** {sentiment_label_map[sentiment_prediction]} (Confidence: {sentiment_conf:.2f})")
-                st.success(f"**Emotion Prediction:** {emotion_label} (Confidence: {emotion_conf:.2f})")
+            # Use st.spinner for a better user experience during prediction
+            with st.spinner("Analyzing tweet..."):
+                cleaned_tweet = cleaner.clean_text(tweet)
+                if cleaned_tweet:
+                    sentiment_vec = sentiment_vectorizer.transform([cleaned_tweet])
+                    sentiment_prediction = sentiment_model.predict(sentiment_vec)[0]
+                    sentiment_proba = sentiment_model.predict_proba(sentiment_vec)[0]
+                    sentiment_conf = np.max(sentiment_proba)
+                    sentiment_label_map = {-1: "Negative 😡", 0: "Neutral 😐", 1: "Positive 😊"}
+                    emotion_vec = emotion_vectorizer.transform([cleaned_tweet])
+                    emotion_prediction = emotion_model.predict(emotion_vec)[0]
+                    emotion_proba = emotion_model.predict_proba(emotion_vec)[0]
+                    emotion_conf = np.max(emotion_proba)
+                    emotion_label_map = {
+                        "joy": "Joy 😊", "anger": "Anger 😠", "sadness": "Sadness 😢",
+                        "fear": "Fear 😨", "surprise": "Surprise 😲", "neutral": "Neutral 😐"
+                    }
+                    emotion_label = emotion_label_map.get(emotion_prediction, f"Unknown Emotion ({emotion_prediction})")
+                    
+                    st.markdown("### Prediction Results")
+                    st.write(f"**Cleaned Tweet:** `{cleaned_tweet}`")
+                    st.success(f"**Sentiment Prediction:** {sentiment_label_map[sentiment_prediction]} (Confidence: {sentiment_conf:.2f})")
+                    st.success(f"**Emotion Prediction:** {emotion_label} (Confidence: {emotion_conf:.2f})")
 
-            else:
-                st.write("Cleaned Tweet: No valid content after cleaning")
-                st.warning("Prediction: Unable to predict (invalid or empty tweet after cleaning)")
+                else:
+                    st.write("Cleaned Tweet: No valid content after cleaning")
+                    st.warning("Prediction: Unable to predict (invalid or empty tweet after cleaning)")
         else:
             st.warning("Please enter a tweet to predict.")
+
+# Function to load models with a progress bar and status message
+def load_models_with_progress_bar():
+    if 'models_loaded' not in st.session_state or not st.session_state['models_loaded']:
+        with st.status("Loading machine learning models...", expanded=True) as status:
+            st.write("Checking model files...")
+            total_steps = len(MODEL_FILES)
+            progress_bar = st.progress(0, text="Downloading and loading files...")
+            
+            paths = {}
+            for i, (key, info) in enumerate(MODEL_FILES.items()):
+                path = DATA_DIR / info["name"]
+                st.write(f"Downloading {info['name']}...")
+                download_from_drive(info["id"], path)
+                paths[key] = path
+                progress_bar.progress((i + 1) / total_steps, text=f"Loading {key}...")
+            
+            st.write("Initializing models...")
+            sentiment_model = joblib.load(paths["sentiment_model"])
+            sentiment_vectorizer = joblib.load(paths["sentiment_vectorizer"])
+            emotion_model = joblib.load(paths["emotion_model"])
+            emotion_vectorizer = joblib.load(paths["emotion_vectorizer"])
+            
+            st.session_state['sentiment_model'] = sentiment_model
+            st.session_state['sentiment_vectorizer'] = sentiment_vectorizer
+            st.session_state['emotion_model'] = emotion_model
+            st.session_state['emotion_vectorizer'] = emotion_vectorizer
+            st.session_state['models_loaded'] = True
+            
+            status.update(label="Models loaded successfully!", state="complete", expanded=False)
+            st.success("All models are ready! You can now use the predictor tool.")
             
 # =========================
 # MAIN APP LOGIC
@@ -667,14 +700,15 @@ def main():
         initial_sidebar_state="expanded"
     )
 
-    sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer = load_all_models_cached()
-    
     st.title("🐦 Twitter Sentiment & Emotion Analysis App")
     st.markdown("This application analyzes Twitter data to visualize sentiment and emotions related to different topics.")
     
+    # Load models with progress bar
+    load_models_with_progress_bar()
+
     # Use tabs for a cleaner user experience
     tab1, tab2 = st.tabs(["📊 Dashboard", "🔍 Predictor"])
-
+    
     with tab1:
         st.subheader("Dashboard")
         if 'df' not in st.session_state:
@@ -820,7 +854,16 @@ def main():
 
 
     with tab2:
-        combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer)
+        # Check if models are loaded before running the predictor
+        if 'models_loaded' in st.session_state and st.session_state['models_loaded']:
+            combined_prediction_page(
+                st.session_state['sentiment_model'],
+                st.session_state['sentiment_vectorizer'],
+                st.session_state['emotion_model'],
+                st.session_state['emotion_vectorizer']
+            )
+        else:
+            st.info("The models are still loading. Please wait a moment and then check this tab again.")
 
 
 if __name__ == '__main__':
