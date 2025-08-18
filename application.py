@@ -1,4 +1,4 @@
-import streamlit as st
+[⚠️ Suspicious Content] import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -17,6 +17,7 @@ import warnings
 from typing import Optional, Dict, List, Tuple
 import threading
 import sys
+import io
 
 # Suppress all warnings for cleaner output
 warnings.filterwarnings('ignore')
@@ -390,7 +391,7 @@ def sentiment_map(df):
     sentiment_map_colors = {-1: "Negative 🔴", 0: "Neutral 🟡", 1: "Positive 🟢"}
     for cat, label in sentiment_map_colors.items():
         color = '#e74c3c' if cat == -1 else '#f39c12' if cat == 0 else '#2ecc71'
-        sub_df = nyc_df[nyc_df['category'] == cat].sample(min(2000, len(nyc_df[nyc_df['category'] == cat])), random_state=42)
+        sub_df = nyc_df[nyc_df['category'] == cat].sample(min(2000, len(nyc_df[df['category'] == cat])), random_state=42)
         st.write(f"### {label}")
         fig = px.scatter_mapbox(sub_df, lat="latitude", lon="longitude",
                                 color_discrete_sequence=[color], zoom=10, height=400,
@@ -734,6 +735,12 @@ def main():
                 st.subheader("Dataset Shape:")
                 st.write(f"Rows: {st.session_state.df.shape[0]:,}")
                 st.write(f"Columns: {st.session_state.df.shape[1]}")
+                st.subheader("DataFrame Info:")
+                buffer = io.StringIO()
+                st.session_state.df.info(buf=buffer)
+                s = buffer.getvalue()
+                st.text(s)
+
 
     with tab2:
         combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer)
@@ -741,4 +748,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
