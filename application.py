@@ -408,7 +408,7 @@ def emotion_map(df):
     nyc_bbox = {'min_lon': -74.27, 'max_lon': -73.68, 'min_lat': 40.48, 'max_lat': 40.95}
     nyc_df = df[(df['longitude'].between(nyc_bbox['min_lon'], nyc_bbox['max_lon'])) &
                 (df['latitude'].between(nyc_bbox['min_lat'], nyc_bbox['max_lat']))]
-    emotion_colors = {"joy": "Joy 😊", "anger": "Anger 😠", "sadness": "Sadness 😢", "fear": "Fear 😨"}
+    emotion_colors = {"joy": "Joy 😊", "anger": "Anger �", "sadness": "Sadness 😢", "fear": "Fear 😨"}
     for emo, label in emotion_colors.items():
         color_hex = {"joy": "#FFD700", "anger": "#FF4500", "sadness": "#1E90FF", "fear": "#9400D3"}.get(emo)
         if color_hex:
@@ -707,7 +707,7 @@ def main():
     load_models_with_progress_bar()
 
     # Use tabs for a cleaner user experience
-    tab1, tab2 = st.tabs(["📊 Dashboard", "🔍 Predictor"])
+    tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🔍 Predictor", "📄 Project Report"])
     
     with tab1:
         st.subheader("Dashboard")
@@ -864,6 +864,10 @@ def main():
             )
         else:
             st.info("The models are still loading. Please wait a moment and then check this tab again.")
+
+    with tab3:
+        st.header("📄 Project Report")
+        st.info("This is the dedicated space for your project report. Once you provide the content, I will update this page for you.")
 
 
 if __name__ == '__main__':
