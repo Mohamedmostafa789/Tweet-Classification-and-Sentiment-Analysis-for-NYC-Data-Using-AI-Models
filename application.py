@@ -11,18 +11,18 @@ import re
 import logging
 import psutil
 import tempfile
+import gdown
 from pathlib import Path
 import warnings
 from typing import Optional, Dict, List, Tuple
 import sys
 import io
 import os
-import gdown
 
 # Suppress all warnings for cleaner output
 warnings.filterwarnings('ignore')
 
-# Set up logging
+# Set up logging to both console and file
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
@@ -33,9 +33,13 @@ logger = logging.getLogger(__name__)
 # -------------------- CONFIG --------------------
 MAX_POINTS_MAP = 5000
 MAX_POINTS_SCATTER = 20000
+
+# Use a persistent directory for files to avoid re-downloading
 DATA_DIR = Path(tempfile.gettempdir()) / "app_data"
 SHAPE_DIR = DATA_DIR / "shapefiles"
 SHAPEFILE_PATH = SHAPE_DIR / "tl_2020_us_zcta510.shp"
+
+# Create directories if they don't exist
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SHAPE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -69,7 +73,9 @@ SHAPE_FILES = [
 ]
 
 # -------------------- HELPER FUNCTIONS --------------------
+
 def download_from_drive(file_id: str, output_path: Path) -> None:
+    """Downloads a file from Google Drive if it doesn't exist or is empty."""
     if not output_path.exists() or output_path.stat().st_size == 0:
         try:
             gdown.download(id=file_id, output=str(output_path), quiet=True, fuzzy=True)
@@ -81,8 +87,9 @@ def download_from_drive(file_id: str, output_path: Path) -> None:
             logger.error(f"Failed to download {output_path.name}: {e}")
             raise
 
-@st.cache_resource(max_entries=1)
+@st.cache_resource
 def load_all_models_cached() -> Tuple:
+    """Loads all models and vectorizers from Google Drive into memory."""
     try:
         paths = {}
         for key, info in MODEL_FILES.items():
@@ -94,12 +101,14 @@ def load_all_models_cached() -> Tuple:
         sentiment_vectorizer = joblib.load(paths["sentiment_vectorizer"])
         emotion_model = joblib.load(paths["emotion_model"])
         emotion_vectorizer = joblib.load(paths["emotion_vectorizer"])
+
         logger.info("Successfully loaded all ML resources.")
         return sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer
     except Exception as e:
         logger.error(f"Failed to load ML resources: {e}")
         raise
 
+# Emoticon map for tweet cleaning
 EMOTICON_MAP = {
     r":-?\)+": "smiling_face", r"=+\)": "smiling_face", r":-?D+": "laughing_face", r"x+D+": "laughing_face",
     r"\^_+\^": "happy_face", r"LOL+": "laughing", r":'-?D+": "tearful_laughter", r":-?\(+": "sad_face",
@@ -174,95 +183,29 @@ class MemoryMonitor:
         gc.collect()
         logger.info(f"Memory usage after GC: {MemoryMonitor.get_memory_usage():.2f} MB")
 
-@st.cache_data(max_entries=1)
+@st.cache_data(max_entries=1)  # Limit cache to 1 entry to save memory
 def load_data(dataset_key: str) -> pd.DataFrame:
     file_info = DATASET_FILES[dataset_key]
     path = DATA_DIR / file_info["name"]
     download_from_drive(file_info["id"], path)
-    
-    try:
-        chunk_size = 10000
-        max_rows = 50000
-        chunks = []
-        rows_loaded = 0
-        
-        for chunk in pd.read_csv(
-            path,
-            chunksize=chunk_size,
-            low_memory=False,
-            dtype={'latitude': 'float32', 'longitude': 'float32'},
-            usecols=['latitude', 'longitude', 'date', 'emotion', 'category', 'cleaned_tweet', 'hashtags', 'median_income']
-        ):
-            chunk = chunk.dropna(subset=['latitude', 'longitude'])
-            chunk = chunk[(chunk['latitude'].between(-90, 90)) & (chunk['longitude'].between(-180, 180))]
-            if 'date' in chunk.columns:
-                chunk['date'] = pd.to_datetime(chunk['date'], errors='coerce')
-            chunks.append(chunk)
-            rows_loaded += len(chunk)
-            if rows_loaded >= max_rows:
-                break
-        
-        if chunks:
-            df = pd.concat(chunks, ignore_index=True)
-            if len(df) > max_rows:
-                df = df.sample(n=max_rows, random_state=42)
-            logger.info(f"Loaded dataset '{dataset_key}' with {len(df)} rows")
-        else:
-            logger.warning(f"No valid data loaded for '{dataset_key}'")
-            st.error(f"Failed to load dataset '{dataset_key}': No valid data after filtering.")
-            return pd.DataFrame()
-        
-        df.columns = [col.strip().lower().replace(' ', '_') for col in df.columns]
-        MemoryMonitor.force_garbage_collection()
-        return df
-    
-    except Exception as e:
-        logger.error(f"Error loading dataset '{dataset_key}': {e}")
-        st.error(f"Failed to load dataset '{dataset_key}': {e}")
-        return pd.DataFrame()
+    df = pd.read_csv(path, low_memory=False, dtype={'latitude': 'float32', 'longitude': 'float32'})
+    df.columns = [col.strip().lower().replace(' ', '_') for col in df.columns]
+    df = df.dropna(subset=['latitude', 'longitude'])
+    df = df[(df['latitude'].between(-90, 90)) & (df['longitude'].between(-180, 180))]
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    MemoryMonitor.force_garbage_collection()
+    return df
 
 @st.cache_data(max_entries=1)
 def load_incident_data(incident_key: str) -> pd.DataFrame:
     file_info = INCIDENT_FILES[incident_key]
     path = DATA_DIR / file_info["name"]
     download_from_drive(file_info["id"], path)
-    
-    try:
-        chunk_size = 10000
-        max_rows = 50000
-        chunks = []
-        rows_loaded = 0
-        
-        for chunk in pd.read_csv(
-            path,
-            chunksize=chunk_size,
-            low_memory=False,
-            dtype={'Incident Zip': 'str'},
-            usecols=['Incident Zip', 'negative', 'positive', 'neutral']
-        ):
-            chunk['Incident Zip'] = chunk['Incident Zip'].astype(str).str.zfill(5)
-            chunks.append(chunk)
-            rows_loaded += len(chunk)
-            if rows_loaded >= max_rows:
-                break
-        
-        if chunks:
-            incident_df = pd.concat(chunks, ignore_index=True)
-            if len(incident_df) > max_rows:
-                incident_df = incident_df.sample(n=max_rows, random_state=42)
-            logger.info(f"Loaded incident data '{incident_key}' with {len(incident_df)} rows")
-        else:
-            logger.warning(f"No valid data loaded for '{incident_key}'")
-            st.error(f"Failed to load incident data '{incident_key}': No valid data.")
-            return pd.DataFrame()
-        
-        MemoryMonitor.force_garbage_collection()
-        return incident_df
-    
-    except Exception as e:
-        logger.error(f"Error loading incident data '{incident_key}': {e}")
-        st.error(f"Failed to load incident data '{incident_key}': {e}")
-        return pd.DataFrame()
+    incident_df = pd.read_csv(path, low_memory=False, dtype={'Incident Zip': 'str'})
+    incident_df['Incident Zip'] = incident_df['Incident Zip'].astype(str).str.zfill(5)
+    MemoryMonitor.force_garbage_collection()
+    return incident_df
 
 @st.cache_resource(max_entries=1)
 def load_shapefile() -> gpd.GeoDataFrame:
@@ -281,7 +224,9 @@ def load_shapefile() -> gpd.GeoDataFrame:
         logger.error(f"Failed to load geographic data: {e}")
         raise
 
-# -------------------- VISUALIZATION FUNCTIONS --------------------
+# =========================
+# VISUALIZATION FUNCTIONS
+# =========================
 plt.style.use('seaborn-v0_8')
 sns.set_context('talk', font_scale=1.2)
 top_n = 5
@@ -303,9 +248,7 @@ def top_emotions_pie_chart(df: pd.DataFrame) -> None:
     ax.axis('equal')
     st.pyplot(fig)
     plt.close(fig)
-    del value_counts, labels, sizes, colors, explode
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This chart visualizes the distribution of the top 5 most frequently detected emotions...")
+    st.markdown(f"**Explanation:** This chart visualizes the distribution of the top 5 most frequently detected emotions in the selected dataset. The largest slice represents the most common emotion, providing a quick overview of the overall emotional tone of the conversations.")
 
 def emotion_sentiment_bar_chart(df: pd.DataFrame) -> None:
     st.subheader("Emotion Distribution by Sentiment Category")
@@ -325,9 +268,7 @@ def emotion_sentiment_bar_chart(df: pd.DataFrame) -> None:
     plt.xticks(rotation=45, ha='right')
     st.pyplot(fig)
     plt.close(fig)
-    del emotion_sentiment, top_emotions
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This chart breaks down each of the top emotions by sentiment category...")
+    st.markdown("**Explanation:** This chart breaks down each of the top emotions by sentiment category (Positive, Neutral, Negative). It helps you understand if a particular emotion, like 'joy,' is consistently associated with positive sentiment or if there is a mix.")
 
 def emotion_confidence_boxplot(df: pd.DataFrame) -> None:
     st.subheader("Emotion Confidence Distribution by Top 5 Emotions")
@@ -344,28 +285,23 @@ def emotion_confidence_boxplot(df: pd.DataFrame) -> None:
     plt.xticks(rotation=45, ha='right')
     st.pyplot(fig)
     plt.close(fig)
-    del top_emotions
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** A higher confidence score indicates that the model is more certain...")
+    st.markdown("**Explanation:** A higher confidence score indicates that the model is more certain of its emotion prediction. This box plot shows the range and average confidence for each of the top emotions, revealing which emotions are easier for the model to identify.")
 
 def geo_sentiment_scatterplot(df: pd.DataFrame) -> None:
     st.subheader("Geographical Distribution of Tweet Sentiments")
     if 'latitude' not in df.columns or 'longitude' not in df.columns:
         st.warning("Latitude and Longitude data not available for this visualization.")
         return
-    sample_df = df.sample(min(MAX_POINTS_SCATTER, len(df)), random_state=42)
     fig, ax = plt.subplots(figsize=(12, 8))
     sns.scatterplot(
         x='longitude', y='latitude',
         hue='category', palette={1: '#ff9999', 0: '#66b3ff', -1: '#99ff99'},
-        data=sample_df, alpha=0.6, ax=ax
+        data=df, alpha=0.6, ax=ax
     )
     ax.set_title('Geographical Distribution of Tweet Sentiments', fontsize=18)
     st.pyplot(fig)
     plt.close(fig)
-    del sample_df
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This scatter plot maps the location of each tweet...")
+    st.markdown("**Explanation:** This scatter plot maps the location of each tweet. The color of each point represents its sentiment, allowing you to visually identify areas with high concentrations of positive, neutral, or negative sentiment.")
 
 def median_income_histogram(df: pd.DataFrame) -> None:
     st.subheader("Distribution of Median Income in Tweet Locations")
@@ -377,8 +313,7 @@ def median_income_histogram(df: pd.DataFrame) -> None:
     ax.set_title('Distribution of Median Income in Tweet Locations', fontsize=18)
     st.pyplot(fig)
     plt.close(fig)
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This histogram shows the distribution of median income...")
+    st.markdown("**Explanation:** This histogram shows the distribution of median income for the ZIP codes associated with the tweets. It helps to understand the economic context of the conversations, for example, whether the majority of tweets come from high-income or low-income areas.")
 
 def sentiment_trends_line_chart(df: pd.DataFrame) -> None:
     st.subheader("Sentiment Trends Over Time")
@@ -386,8 +321,8 @@ def sentiment_trends_line_chart(df: pd.DataFrame) -> None:
         st.warning("Date data not available for this visualization.")
         return
     sentiment_over_time = df.groupby([df['date'].dt.date, 'category']) \
-                           .size().unstack(fill_value=0) \
-                           .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
+                                 .size().unstack(fill_value=0) \
+                                 .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
     fig, ax = plt.subplots(figsize=(14, 7))
     for col in sentiment_over_time.columns:
         ax.plot(sentiment_over_time.index, sentiment_over_time[col], label=col, linewidth=2)
@@ -395,9 +330,7 @@ def sentiment_trends_line_chart(df: pd.DataFrame) -> None:
     ax.set_title('Sentiment Trends Over Time', fontsize=18)
     st.pyplot(fig)
     plt.close(fig)
-    del sentiment_over_time
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This chart tracks the number of positive, negative, and neutral tweets...")
+    st.markdown("**Explanation:** This chart tracks the number of positive, negative, and neutral tweets over time. It can reveal interesting trends, such as spikes in negative sentiment following a specific news event or policy change related to the dataset's topic.")
 
 def emotion_sentiment_heatmap(df: pd.DataFrame) -> None:
     st.subheader("Emotion vs Sentiment Correlation Heatmap")
@@ -413,15 +346,17 @@ def emotion_sentiment_heatmap(df: pd.DataFrame) -> None:
     ax.set_title('Emotion vs Sentiment Correlation', fontsize=18)
     st.pyplot(fig)
     plt.close(fig)
-    del top_emotions, emotion_sentiment_counts
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This heatmap shows the relationship between different emotions...")
+    st.markdown("**Explanation:** This heatmap shows the relationship between different emotions and their corresponding sentiments. The values in each cell indicate the number of tweets that share a specific emotion-sentiment combination, highlighting which emotions are most strongly linked to a particular sentiment.")
 
 def sentiment_pie_chart(df: pd.DataFrame) -> None:
     st.subheader("Sentiment Distribution")
     value_counts = df['category'].value_counts()
     labels = ['Positive', 'Neutral', 'Negative']
-    sizes = [value_counts.get(1, 0), value_counts.get(0, 0), value_counts.get(-1, 0)]
+    sizes = [
+        value_counts.get(1, 0),
+        value_counts.get(0, 0),
+        value_counts.get(-1, 0)
+    ]
     fig, ax = plt.subplots(figsize=(6, 6))
     colors = ['#4CAF50', '#2196F3', '#F44336']
     explode = (0.1, 0, 0)
@@ -429,9 +364,7 @@ def sentiment_pie_chart(df: pd.DataFrame) -> None:
     ax.axis('equal')
     st.pyplot(fig)
     plt.close(fig)
-    del value_counts, sizes, labels, colors, explode
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This simple pie chart provides a clear and direct summary...")
+    st.markdown("**Explanation:** This simple pie chart provides a clear and direct summary of the overall sentiment in the selected dataset. Each slice represents the percentage of tweets classified as positive, neutral, or negative, giving you a quick understanding of the dominant sentiment.")
 
 def emotion_pie_chart(df: pd.DataFrame) -> None:
     st.subheader("Emotion Distribution")
@@ -448,9 +381,7 @@ def emotion_pie_chart(df: pd.DataFrame) -> None:
     ax.axis('equal')
     st.pyplot(fig)
     plt.close(fig)
-    del value_counts, labels, sizes, colors, explode
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** Similar to the sentiment chart, this pie chart provides a quick visual...")
+    st.markdown("**Explanation:** Similar to the sentiment chart, this pie chart provides a quick visual summary of the most common emotions expressed in the tweets. The largest slice indicates the most frequent emotion, whether it's 'joy', 'anger', or something else.")
 
 def sentiment_map(df: pd.DataFrame) -> None:
     st.subheader("Geographical Sentiment Map (Sampled)")
@@ -467,9 +398,7 @@ def sentiment_map(df: pd.DataFrame) -> None:
                                 hover_data=["emotion"])
         fig.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
         st.plotly_chart(fig, use_container_width=True)
-        del sub_df
-        MemoryMonitor.force_garbage_collection()
-        st.markdown(f"**Explanation:** This map shows the geographical distribution of tweets with **{label.replace('🔴','').replace('🟡','').replace('🟢','').strip()}** sentiment...")
+        st.markdown(f"**Explanation:** This map shows the geographical distribution of tweets with **{label.replace('🔴','').replace('🟡','').replace('🟢','').strip()}** sentiment. Each point is a tweet location, allowing you to see clusters of sentiment in different parts of New York City.")
 
 def emotion_map(df: pd.DataFrame) -> None:
     st.subheader("Geographical Emotion Map (Sampled)")
@@ -490,38 +419,83 @@ def emotion_map(df: pd.DataFrame) -> None:
                                     hover_data=["category"])
             fig.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
             st.plotly_chart(fig, use_container_width=True)
-            del sub_df
-            MemoryMonitor.force_garbage_collection()
-            st.markdown(f"**Explanation:** This map shows the locations of tweets expressing **{label.replace('😊','').replace('😠','').replace('😢','').replace('😨','').strip()}**...")
+            st.markdown(f"**Explanation:** This map shows the locations of tweets expressing **{label.replace('😊','').replace('😠','').replace('😢','').replace('😨','').strip()}**. It helps you identify which parts of the city are feeling a particular emotion most strongly.")
 
 def zip_code_maps(incident_df: pd.DataFrame, nyc_gdf: gpd.GeoDataFrame) -> None:
     st.subheader("ZIP Code Sentiment Maps")
-    map_type = st.selectbox("Select map type:", ["Count Maps", "Percentage Maps"], key="zip_code_map_type")
-    sentiment_type = st.selectbox("Select sentiment:", ["Negative", "Positive", "Neutral"], key="zip_code_sentiment")
-    
     incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
     incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
     for col in ['negative', 'positive', 'neutral']:
         incident_sums[col + '_pct'] = (incident_sums[col] / incident_sums['total']).fillna(0) * 100
     merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
-    merged_gdf[['negative', 'positive', 'neutral', 'negative_pct', 'positive_pct', 'neutral_pct']] = merged_gdf[
-        ['negative', 'positive', 'neutral', 'negative_pct', 'positive_pct', 'neutral_pct']].fillna(0)
+    merged_gdf[['negative', 'positive', 'neutral',
+                'negative_pct', 'positive_pct', 'neutral_pct']] = merged_gdf[
+                    ['negative', 'positive', 'neutral',
+                     'negative_pct', 'positive_pct', 'neutral_pct']].fillna(0)
     
-    column = f"{sentiment_type.lower()}_pct" if map_type == "Percentage Maps" else sentiment_type.lower()
-    title = f"{sentiment_type} Incidents {'%' if map_type == 'Percentage Maps' else 'Count'}"
-    cmap = 'Reds' if sentiment_type == "Negative" else 'Greens' if sentiment_type == "Positive" else 'Blues'
-    
-    st.write(f"#### {title}")
-    fig, ax = plt.subplots(figsize=(6, 6))
-    merged_gdf.plot(column=column, cmap=cmap, linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
-                    legend_kwds={'label': "Percentage" if map_type == "Percentage Maps" else "Count"})
-    ax.axis('off')
-    ax.set_title(title, fontsize=12)
-    st.pyplot(fig)
-    plt.close(fig)
-    del incident_sums, merged_gdf
-    MemoryMonitor.force_garbage_collection()
-    st.markdown(f"**Explanation:** This map shows the {sentiment_type.lower()} sentiment {'percentage' if map_type == 'Percentage Maps' else 'count'} per ZIP code...")
+    st.markdown("### Count Maps")
+    st.markdown("These maps show the raw number of incidents with a specific sentiment per ZIP code.")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.write("#### Negative Incidents")
+        fig, ax = plt.subplots(figsize=(6, 6))
+        merged_gdf.plot(column='negative', cmap='Reds', linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
+                         legend_kwds={'label': "Count"})
+        ax.axis('off')
+        ax.set_title("Negative Incident Count", fontsize=12)
+        st.pyplot(fig)
+        plt.close(fig)
+    with col2:
+        st.write("#### Positive Incidents")
+        fig, ax = plt.subplots(figsize=(6, 6))
+        merged_gdf.plot(column='positive', cmap='Greens', linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
+                         legend_kwds={'label': "Count"})
+        ax.axis('off')
+        ax.set_title("Positive Incident Count", fontsize=12)
+        st.pyplot(fig)
+        plt.close(fig)
+    with col3:
+        st.write("#### Neutral Incidents")
+        fig, ax = plt.subplots(figsize=(6, 6))
+        merged_gdf.plot(column='neutral', cmap='Blues', linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
+                         legend_kwds={'label': "Count"})
+        ax.axis('off')
+        ax.set_title("Neutral Incident Count", fontsize=12)
+        st.pyplot(fig)
+        plt.close(fig)
+
+    st.markdown("### Percentage Maps")
+    st.markdown("These maps show the percentage of a specific sentiment relative to the total number of incidents in a ZIP code.")
+    col4, col5, col6 = st.columns(3)
+    with col4:
+        st.write("#### Negative Incidents (%)")
+        fig, ax = plt.subplots(figsize=(6, 6))
+        merged_gdf.plot(column='negative_pct', cmap='Reds', linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
+                         legend_kwds={'label': "Percentage"})
+        ax.axis('off')
+        ax.set_title("Negative Incident %", fontsize=12)
+        st.pyplot(fig)
+        plt.close(fig)
+    with col5:
+        st.write("#### Positive Incidents (%)")
+        fig, ax = plt.subplots(figsize=(6, 6))
+        merged_gdf.plot(column='positive_pct', cmap='Greens', linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
+                         legend_kwds={'label': "Percentage"})
+        ax.axis('off')
+        ax.set_title("Positive Incident %", fontsize=12)
+        st.pyplot(fig)
+        plt.close(fig)
+    with col6:
+        st.write("#### Neutral Incidents (%)")
+        fig, ax = plt.subplots(figsize=(6, 6))
+        merged_gdf.plot(column='neutral_pct', cmap='Blues', linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
+                         legend_kwds={'label': "Percentage"})
+        ax.axis('off')
+        ax.set_title("Neutral Incident %", fontsize=12)
+        st.pyplot(fig)
+        plt.close(fig)
+        
+    st.markdown("**Explanation:** These maps display the sentiment of incidents at the ZIP code level. The 'Count' maps show the raw number of tweets per sentiment, while the 'Percentage' maps show the proportion. This is useful for identifying which neighborhoods are feeling the most strongly about a topic, regardless of population size.")
 
 def zip_code_heatmap(incident_df: pd.DataFrame, nyc_gdf: gpd.GeoDataFrame) -> None:
     st.subheader("ZIP Code Sentiment Heatmap")
@@ -530,17 +504,15 @@ def zip_code_heatmap(incident_df: pd.DataFrame, nyc_gdf: gpd.GeoDataFrame) -> No
     incident_sums['combined_sentiment'] = (incident_sums['positive'] - incident_sums['negative']) / incident_sums['total'].replace(0, 1)
     merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
     merged_gdf['combined_sentiment'] = merged_gdf['combined_sentiment'].fillna(0)
-    fig, ax = plt.subplots(figsize=(12, 10))
+    fig, ax = plt.subplots(1, 1, figsize=(12, 10))
     merged_gdf.plot(column='combined_sentiment', cmap='RdYlBu_r', linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
-                    legend_kwds={'label': "Sentiment Score"})
+                     legend_kwds={'label': "Sentiment Score"})
     ax.set_title("NYC Sentiment Heatmap 2020", fontsize=16)
     ax.axis('off')
     plt.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
-    del incident_sums, merged_gdf
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This heatmap provides a single, easy-to-read view of sentiment across NYC ZIP codes...")
+    st.markdown("**Explanation:** This heatmap provides a single, easy-to-read view of sentiment across NYC ZIP codes. A positive score (blue) indicates a prevalence of positive tweets, while a negative score (red) indicates a prevalence of negative tweets. This allows for a direct comparison of sentiment between different neighborhoods.")
 
 def borough_income_chart(df: pd.DataFrame) -> None:
     st.subheader("Average Median Income by NYC Borough")
@@ -581,18 +553,22 @@ def borough_income_chart(df: pd.DataFrame) -> None:
         ax.text(i, value + 500, f"${value:,.0f}", ha='center', va='bottom', fontsize=10)
     st.pyplot(fig)
     plt.close(fig)
-    del borough_income
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This bar chart visualizes the average median income for each NYC borough...")
+    st.markdown("**Explanation:** This bar chart visualizes the average median income for each NYC borough based on the tweet data. It allows you to see the economic context of conversations in different parts of the city and compare them directly.")
 
 def top_hashtags_bar_chart(df: pd.DataFrame) -> None:
     st.subheader("Top 10 Most Frequent Hashtags")
     if 'hashtags' not in df.columns:
         st.warning("Hashtag data not available for this dataset.")
         return
+    
+    # Safely handle non-string values and split hashtags
     all_hashtags = df['hashtags'].astype(str).str.split(',')
     flat_hashtags = [item.strip().lower() for sublist in all_hashtags.dropna() for item in sublist]
+    
+    # Count frequency and get top 10
     hashtag_counts = pd.Series(flat_hashtags).value_counts().head(10)
+    
+    # Plotting
     fig, ax = plt.subplots(figsize=(12, 7))
     sns.barplot(x=hashtag_counts.values, y=hashtag_counts.index, palette='viridis', ax=ax)
     ax.set_title('Top 10 Most Frequent Hashtags', fontsize=18)
@@ -601,18 +577,19 @@ def top_hashtags_bar_chart(df: pd.DataFrame) -> None:
     plt.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
-    del all_hashtags, flat_hashtags, hashtag_counts
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This bar chart shows the 10 most used hashtags in the dataset...")
+    st.markdown("**Explanation:** This bar chart shows the 10 most used hashtags in the dataset. It provides a quick way to identify the most popular topics and trends within the conversation.")
 
 def tweet_length_vs_sentiment_boxplot(df: pd.DataFrame) -> None:
     st.subheader("Tweet Length vs. Sentiment")
     if 'cleaned_tweet' not in df.columns or 'category' not in df.columns:
         st.warning("Required 'cleaned_tweet' or 'category' data not available.")
         return
+    
+    # Calculate tweet length and map categories to labels
     df['tweet_length'] = df['cleaned_tweet'].astype(str).apply(len)
     sentiment_map = {1: 'Positive', 0: 'Neutral', -1: 'Negative'}
     df['sentiment_label'] = df['category'].map(sentiment_map)
+    
     fig, ax = plt.subplots(figsize=(12, 7))
     sns.boxplot(x='sentiment_label', y='tweet_length', data=df, ax=ax, palette='Set2')
     ax.set_title('Tweet Length Distribution by Sentiment', fontsize=18)
@@ -620,17 +597,18 @@ def tweet_length_vs_sentiment_boxplot(df: pd.DataFrame) -> None:
     ax.set_ylabel('Tweet Length (characters)', fontsize=14)
     st.pyplot(fig)
     plt.close(fig)
-    del df['tweet_length'], df['sentiment_label']
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This box plot helps us understand if there's a relationship between the length of a tweet...")
-
+    st.markdown("**Explanation:** This box plot helps us understand if there's a relationship between the length of a tweet and its sentiment. For example, are negative tweets typically shorter and more direct, or are positive tweets longer and more descriptive?")
+    
 def emotion_trends_line_chart(df: pd.DataFrame) -> None:
     st.subheader("Emotion Trends Over Time")
     if 'date' not in df.columns or 'emotion' not in df.columns:
         st.warning("Required 'date' or 'emotion' data not available.")
         return
+
+    # Count emotions per day
     emotion_over_time = df.groupby([df['date'].dt.date, 'emotion']) \
-                         .size().unstack(fill_value=0)
+                                 .size().unstack(fill_value=0)
+    
     fig, ax = plt.subplots(figsize=(14, 7))
     for col in emotion_over_time.columns:
         ax.plot(emotion_over_time.index, emotion_over_time[col], label=col, linewidth=2)
@@ -641,10 +619,8 @@ def emotion_trends_line_chart(df: pd.DataFrame) -> None:
     plt.xticks(rotation=45, ha='right')
     st.pyplot(fig)
     plt.close(fig)
-    del emotion_over_time
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This chart visualizes how the frequency of different emotions changes over time...")
-
+    st.markdown("**Explanation:** This chart visualizes how the frequency of different emotions changes over time. Unlike the sentiment chart, this gives you a more nuanced look at the emotional landscape of the data, showing how 'joy' or 'fear' might spike on specific days.")
+    
 def combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer) -> None:
     st.title("Tweet Sentiment and Emotion Predictor")
     cleaner = MemoryOptimizedTweetCleaner()
@@ -673,6 +649,7 @@ def combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_mode
                     st.write(f"**Cleaned Tweet:** `{cleaned_tweet}`")
                     st.success(f"**Sentiment Prediction:** {sentiment_label_map[sentiment_prediction]} (Confidence: {sentiment_conf:.2f})")
                     st.success(f"**Emotion Prediction:** {emotion_label} (Confidence: {emotion_conf:.2f})")
+
                 else:
                     st.write("Cleaned Tweet: No valid content after cleaning")
                     st.warning("Prediction: Unable to predict (invalid or empty tweet after cleaning)")
@@ -707,7 +684,9 @@ def load_models_with_progress_bar() -> None:
             st.success("All models are ready! You can now use the predictor tool.")
             MemoryMonitor.force_garbage_collection()
 
-# -------------------- MAIN APP LOGIC --------------------
+# =========================
+# MAIN APP LOGIC
+# =========================
 def main() -> None:
     st.set_page_config(
         page_title="Twitter Sentiment Analysis",
@@ -718,12 +697,11 @@ def main() -> None:
 
     st.title("🐦 Twitter Sentiment & Emotion Analysis App")
     st.markdown("This application analyzes Twitter data to visualize sentiment and emotions related to different topics.")
-    st.write(f"Current memory usage: {MemoryMonitor.get_memory_usage():.2f} MB")
-    if MemoryMonitor.get_memory_usage() > 400:
-        st.warning("High memory usage detected. Consider clearing memory or selecting a different dataset.")
-
+    
+    # Load models with progress bar
     load_models_with_progress_bar()
 
+    # Use tabs for a cleaner user experience
     tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🔍 Predictor", "📄 Project Report"])
     
     with tab1:
@@ -740,45 +718,26 @@ def main() -> None:
                 placeholder="Choose a dataset"
             )
             
-            if st.button("Clear Memory"):
-                if 'df' in st.session_state:
-                    del st.session_state['df']
-                if 'incident_df' in st.session_state:
-                    del st.session_state['incident_df']
-                if 'nyc_gdf' in st.session_state:
-                    del st.session_state['nyc_gdf']
-                st.cache_data.clear()
-                st.cache_resource.clear()
-                MemoryMonitor.force_garbage_collection()
-                st.session_state['current_dataset_choice'] = None
-                st.success("Memory cleared! You can now load a new dataset.")
-
             if st.button("Load Dataset"):
                 if dataset_choice:
                     if dataset_choice != st.session_state['current_dataset_choice']:
-                        st.warning(f"Switching to '{dataset_choice}' will clear previous data to free memory. Continue?")
-                        if st.button("Confirm"):
-                            if 'df' in st.session_state:
-                                del st.session_state['df']
-                            if 'incident_df' in st.session_state:
-                                del st.session_state['incident_df']
-                            if 'nyc_gdf' in st.session_state:
-                                del st.session_state['nyc_gdf']
-                            st.cache_data.clear()
-                            st.cache_resource.clear()
-                            MemoryMonitor.force_garbage_collection()
-                            st.session_state['current_dataset_choice'] = dataset_choice
-                            with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
-                                st.session_state['df'] = load_data(dataset_choice)
-                            with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
-                                st.session_state['incident_df'] = load_incident_data(dataset_choice)
-                            st.success(f"Data for '{dataset_choice}' has been loaded!")
-                    else:
-                        with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
-                            st.session_state['df'] = load_data(dataset_choice)
-                        with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
-                            st.session_state['incident_df'] = load_incident_data(dataset_choice)
-                        st.success(f"Data for '{dataset_choice}' has been loaded!")
+                        # Clear previous data to free memory
+                        if 'df' in st.session_state:
+                            del st.session_state['df']
+                        if 'incident_df' in st.session_state:
+                            del st.session_state['incident_df']
+                        if 'nyc_gdf' in st.session_state:
+                            del st.session_state['nyc_gdf']
+                        st.cache_data.clear()
+                        st.cache_resource.clear()
+                        MemoryMonitor.force_garbage_collection()
+                        st.session_state['current_dataset_choice'] = dataset_choice
+
+                    with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
+                        st.session_state['df'] = load_data(dataset_choice)
+                    with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
+                        st.session_state['incident_df'] = load_incident_data(dataset_choice)
+                    st.success(f"Data for '{dataset_choice}' has been loaded!")
                 else:
                     st.warning("Please select a dataset first.")
         
@@ -787,6 +746,7 @@ def main() -> None:
         else:
             st.header(f"Visualizing: {st.session_state['current_dataset_choice']} Data")
             
+            # Use nested tabs for better organization
             tab_basic, tab_advanced, tab_geo, tab_statistical, tab_summary = st.tabs([
                 "Basic Visualizations", 
                 "Advanced Charts", 
@@ -872,7 +832,7 @@ def main() -> None:
                 elif geo_statistical_map_choice == "ZIP Code Sentiment Heatmap":
                     zip_code_heatmap(st.session_state.incident_df, st.session_state.nyc_gdf)
                 elif geo_statistical_map_choice == "Average Median Income by Borough":
-                    borough_income_chart(st.session_state.incident_df)
+                    borough_income_chart(st.session_state.df)
 
             with tab_summary:
                 st.header("Dataset Summary")
@@ -888,7 +848,9 @@ def main() -> None:
                 s = buffer.getvalue()
                 st.text(s)
 
+
     with tab2:
+        # Check if models are loaded before running the predictor
         if 'models_loaded' in st.session_state and st.session_state['models_loaded']:
             combined_prediction_page(
                 st.session_state['sentiment_model'],
@@ -901,6 +863,8 @@ def main() -> None:
 
     with tab3:
         st.header("📄 Project Report")
+        
+        # --- Start of report content ---
         st.markdown("""
 ### Tweet Classification and Sentiment Analysis for NYC Data Using AI Models
 **Mohamed Mostafa**
@@ -1034,6 +998,7 @@ This project processed ~24M NYC tweets, overcoming noise and multilingual challe
 -   Liu, Y., et al. (2019). RoBERTa: A Robustly Optimized BERT Pretraining Approach. arXiv preprint arXiv:1907.11692. https://arxiv.org/abs/1907.11692
 -   Nagpal, M. (2024). How to use an LLM for Sentiment Analysis? ProjectPro. https://www.projectpro.io/article/llm-sentiment-analysis/1125
         """)
+        # --- End of report content ---
 
 if __name__ == '__main__':
     main()
