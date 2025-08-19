@@ -1,0 +1,6 @@
+[global]
+dataFrameSerialization = "legacy"
+[server]
+maxUploadSize = 50
+[runner]
+magicEnabled = false
