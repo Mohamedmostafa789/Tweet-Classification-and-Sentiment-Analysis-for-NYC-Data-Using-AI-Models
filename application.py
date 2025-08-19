@@ -559,7 +559,8 @@ def main():
 
     if 'df' not in st.session_state:
         st.session_state['df'] = None
-    if 'incident_df' not in in st.session_state:
+    # FIX: Corrected the syntax error by removing the duplicate 'in'
+    if 'incident_df' not in st.session_state:
         st.session_state['incident_df'] = None
     if 'nyc_gdf' not in st.session_state:
         st.session_state['nyc_gdf'] = None
