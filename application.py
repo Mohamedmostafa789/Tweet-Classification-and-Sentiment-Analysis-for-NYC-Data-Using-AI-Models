@@ -22,12 +22,11 @@ from queue import Queue
 import warnings
 from typing import Optional, Dict, List, Tuple
 import threading
-import sys
 
-# Suppress all warnings for cleaner output
+# Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
 
-# Set up logging to both console and file
+# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
@@ -39,12 +38,10 @@ logger = logging.getLogger(__name__)
 MAX_POINTS_MAP = 5000
 MAX_POINTS_SCATTER = 20000
 
-# Use a persistent directory for files to avoid re-downloading on every run in some environments
 DATA_DIR = Path(tempfile.gettempdir()) / "app_data"
 SHAPE_DIR = DATA_DIR / "shapefiles"
 SHAPEFILE_PATH = SHAPE_DIR / "tl_2020_us_zcta510.shp"
 
-# Create directories if they don't exist
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SHAPE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -78,7 +75,6 @@ SHAPE_FILES = [
 ]
 
 # -------------------- HELPER FUNCTIONS --------------------
-
 def download_from_drive(file_id, output_path: Path):
     """Downloads a file from Google Drive if it doesn't exist."""
     if not output_path.exists() or output_path.stat().st_size == 0:
@@ -106,7 +102,6 @@ def load_all_models_cached():
         sentiment_vectorizer = joblib.load(paths["sentiment_vectorizer"])
         emotion_model = joblib.load(paths["emotion_model"])
         emotion_vectorizer = joblib.load(paths["emotion_vectorizer"])
-
         logger.info("Successfully loaded all ML resources.")
         return sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer
     except Exception as e:
@@ -195,27 +190,80 @@ class MemoryMonitor:
     def force_garbage_collection():
         gc.collect()
 
-@st.cache_data
-def load_data(dataset_key):
+@st.cache_data(max_entries=1)
+def load_data(dataset_key: str) -> pd.DataFrame:
+    if MemoryMonitor.get_memory_usage() > 400:
+        logger.warning("High memory usage before loading dataset. Clearing caches.")
+        st.cache_data.clear()
+        MemoryMonitor.force_garbage_collection()
+    
     file_info = DATASET_FILES[dataset_key]
     path = DATA_DIR / file_info["name"]
     download_from_drive(file_info["id"], path)
-    df = pd.read_csv(path, low_memory=False)
-    df.columns = [col.strip().lower().replace(' ', '_') for col in df.columns]
-    df = df.dropna(subset=['latitude', 'longitude'])
-    df = df[(df['latitude'].between(-90, 90)) & (df['longitude'].between(-180, 180))]
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    return df
+    
+    try:
+        # Check available columns
+        temp_df = pd.read_csv(path, nrows=1)
+        available_columns = temp_df.columns.tolist()
+        expected_columns = ['latitude', 'longitude', 'date', 'emotion', 'category', 'cleaned_tweet', 'hashtags', 'median_income']
+        missing_columns = [col for col in expected_columns if col not in available_columns]
+        
+        if missing_columns:
+            logger.warning(f"Missing columns in '{dataset_key}': {missing_columns}")
+            st.warning(f"Dataset '{dataset_key}' is missing columns: {missing_columns}. Loading available columns.")
+        
+        # Load data with available columns
+        df = pd.read_csv(path, low_memory=False)
+        df.columns = [col.strip().lower().replace(' ', '_') for col in df.columns]
+        
+        # Apply filtering only if columns are present
+        if 'latitude' in df.columns and 'longitude' in df.columns:
+            df = df.dropna(subset=['latitude', 'longitude'])
+            df = df[(df['latitude'].between(-90, 90)) & (df['longitude'].between(-180, 180))]
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+        
+        if df.empty:
+            logger.warning(f"No valid data loaded for '{dataset_key}' after filtering")
+            st.error(f"Failed to load dataset '{dataset_key}': No valid data after filtering. Available columns: {available_columns}")
+            return pd.DataFrame()
+        
+        logger.info(f"Loaded dataset '{dataset_key}' with {len(df)} rows")
+        MemoryMonitor.force_garbage_collection()
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading dataset '{dataset_key}': {e}")
+        st.error(f"Failed to load dataset '{dataset_key}': {e}")
+        return pd.DataFrame()
 
-@st.cache_data
-def load_incident_data(incident_key):
+@st.cache_data(max_entries=1)
+def load_incident_data(incident_key: str) -> pd.DataFrame:
+    if MemoryMonitor.get_memory_usage() > 400:
+        logger.warning("High memory usage before loading incident data. Clearing caches.")
+        st.cache_data.clear()
+        MemoryMonitor.force_garbage_collection()
+    
     file_info = INCIDENT_FILES[incident_key]
     path = DATA_DIR / file_info["name"]
     download_from_drive(file_info["id"], path)
-    incident_df = pd.read_csv(path, low_memory=False)
-    incident_df['Incident Zip'] = incident_df['Incident Zip'].astype(str).str.zfill(5)
-    return incident_df
+    
+    try:
+        incident_df = pd.read_csv(path, low_memory=False)
+        if 'Incident Zip' in incident_df.columns:
+            incident_df['Incident Zip'] = incident_df['Incident Zip'].astype(str).str.zfill(5)
+        else:
+            logger.warning(f"No 'Incident Zip' column in incident data '{incident_key}'")
+            st.warning(f"Incident dataset '{incident_key}' is missing 'Incident Zip' column.")
+        
+        logger.info(f"Loaded incident data '{incident_key}' with {len(incident_df)} rows")
+        MemoryMonitor.force_garbage_collection()
+        return incident_df
+    
+    except Exception as e:
+        logger.error(f"Error loading incident data '{incident_key}': {e}")
+        st.error(f"Failed to load incident data '{incident_key}': {e}")
+        return pd.DataFrame()
 
 @st.cache_data
 def load_shapefile():
@@ -226,9 +274,7 @@ def load_shapefile():
         zcta_gdf = gpd.read_file(SHAPEFILE_PATH)
         zcta_gdf['ZCTA5CE10'] = zcta_gdf['ZCTA5CE10'].astype(str).str.zfill(5)
         nyc_zip_prefixes = ('100', '101', '102', '103', '104', '111', '112', '113', '114', '116')
-        # Optimized: filter the GeoDataFrame immediately to save memory
         nyc_gdf = zcta_gdf[zcta_gdf['ZCTA5CE10'].str.startswith(nyc_zip_prefixes)].copy()
-        # Explicitly delete the full GeoDataFrame to free up memory
         del zcta_gdf
         gc.collect()
         return nyc_gdf
@@ -236,10 +282,8 @@ def load_shapefile():
         logger.error(f"Failed to load geographic data: {e}")
         st.error("Failed to load geographic data. Please check shapefile availability.")
         st.stop()
-    
-# =========================
-# NEW VISUALIZATION FUNCTIONS
-# =========================
+
+# -------------------- VISUALIZATION FUNCTIONS --------------------
 plt.style.use('seaborn-v0_8')
 sns.set_context('talk', font_scale=1.2)
 top_n = 5
@@ -337,8 +381,8 @@ def sentiment_trends_line_chart(df):
         st.warning("Date data not available for this visualization.")
         return
     sentiment_over_time = df.groupby([df['date'].dt.date, 'category']) \
-                                 .size().unstack(fill_value=0) \
-                                 .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
+                           .size().unstack(fill_value=0) \
+                           .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
     fig, ax = plt.subplots(figsize=(14, 7))
     for col in sentiment_over_time.columns:
         ax.plot(sentiment_over_time.index, sentiment_over_time[col], label=col, linewidth=2)
@@ -368,13 +412,15 @@ def emotion_sentiment_heatmap(df):
 
 def sentiment_pie_chart(df):
     st.subheader("Sentiment Distribution")
+    if 'category' not in df.columns or df['category'].isnull().all():
+        st.warning("Sentiment data not available for this dataset.")
+        return
     value_counts = df['category'].value_counts()
     labels = ['Positive', 'Neutral', 'Negative']
-    sizes = [
-        value_counts.get(1, 0),
-        value_counts.get(0, 0),
-        value_counts.get(-1, 0)
-    ]
+    sizes = [value_counts.get(1, 0), value_counts.get(0, 0), value_counts.get(-1, 0)]
+    if sum(sizes) == 0:
+        st.warning("No valid sentiment data available for visualization.")
+        return
     fig, ax = plt.subplots(figsize=(6, 6))
     colors = ['#4CAF50', '#2196F3', '#F44336']
     explode = (0.1, 0, 0)
@@ -382,12 +428,19 @@ def sentiment_pie_chart(df):
     ax.axis('equal')
     st.pyplot(fig)
     plt.close(fig)
+    st.markdown("**Explanation:** This simple pie chart provides a clear and direct summary...")
 
 def emotion_pie_chart(df):
     st.subheader("Emotion Distribution")
+    if 'emotion' not in df.columns or df['emotion'].isnull().all():
+        st.warning("Emotion data not available for this dataset.")
+        return
     value_counts = df['emotion'].value_counts()
     labels = value_counts.index.tolist()
     sizes = value_counts.values.tolist()
+    if sum(sizes) == 0:
+        st.warning("No valid emotion data available for visualization.")
+        return
     fig, ax = plt.subplots(figsize=(6, 6))
     colors = sns.color_palette("husl", len(labels))
     explode = [0.1] + [0] * (len(labels) - 1)
@@ -397,9 +450,15 @@ def emotion_pie_chart(df):
     plt.close(fig)
 
 def sentiment_map(df):
+    if 'latitude' not in df.columns or 'longitude' not in df.columns:
+        st.warning("Latitude and Longitude data not available for this visualization.")
+        return
     nyc_bbox = {'min_lon': -74.27, 'max_lon': -73.68, 'min_lat': 40.48, 'max_lat': 40.95}
     nyc_df = df[(df['longitude'].between(nyc_bbox['min_lon'], nyc_bbox['max_lon'])) &
                 (df['latitude'].between(nyc_bbox['min_lat'], nyc_bbox['max_lat']))]
+    if nyc_df.empty:
+        st.warning("No valid data within NYC bounds for this visualization.")
+        return
     sentiment_map = {-1: "#e74c3c", 0: "#f39c12", 1: "#2ecc71"}
     for cat, color in sentiment_map.items():
         sub_df = nyc_df[nyc_df['category'] == cat].sample(min(2000, len(nyc_df[nyc_df['category'] == cat])), random_state=42)
@@ -410,9 +469,15 @@ def sentiment_map(df):
         st.plotly_chart(fig, use_container_width=True)
 
 def emotion_map(df):
+    if 'latitude' not in df.columns or 'longitude' not in df.columns:
+        st.warning("Latitude and Longitude data not available for this visualization.")
+        return
     nyc_bbox = {'min_lon': -74.27, 'max_lon': -73.68, 'min_lat': 40.48, 'max_lat': 40.95}
     nyc_df = df[(df['longitude'].between(nyc_bbox['min_lon'], nyc_bbox['max_lon'])) &
                 (df['latitude'].between(nyc_bbox['min_lat'], nyc_bbox['max_lat']))]
+    if nyc_df.empty:
+        st.warning("No valid data within NYC bounds for this visualization.")
+        return
     emotion_colors = {"joy": "#FFD700", "anger": "#FF4500", "sadness": "#1E90FF", "fear": "#9400D3"}
     for emo, color in emotion_colors.items():
         sub_df = nyc_df[nyc_df['emotion'] == emo].sample(min(2000, len(nyc_df[nyc_df['emotion'] == emo])), random_state=42)
@@ -424,6 +489,9 @@ def emotion_map(df):
 
 def zip_code_maps(incident_df, nyc_gdf):
     st.subheader("ZIP Code Sentiment Maps")
+    if 'Incident Zip' not in incident_df.columns:
+        st.warning("Incident Zip data not available for this visualization.")
+        return
     incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
     incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
     for col in ['negative', 'positive', 'neutral']:
@@ -438,14 +506,14 @@ def zip_code_maps(incident_df, nyc_gdf):
     cmaps_counts = ['Reds', 'Greens', 'Blues']
     for ax, cat, cmap in zip(axes[0], categories_counts, cmaps_counts):
         merged_gdf.plot(column=cat, cmap=cmap, linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
-                         legend_kwds={'label': "Count", 'orientation': "vertical"})
+                        legend_kwds={'label': "Count", 'orientation': "vertical"})
         ax.set_title(f"NYC {cat.capitalize()} Incidents (Count)", fontsize=14)
         ax.axis('off')
     categories_pct = ['negative_pct', 'positive_pct', 'neutral_pct']
     cmaps_pct = ['Reds', 'Greens', 'Blues']
     for ax, cat, cmap in zip(axes[1], categories_pct, cmaps_pct):
         merged_gdf.plot(column=cat, cmap=cmap, linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
-                         legend_kwds={'label': "Percentage", 'orientation': "vertical"})
+                        legend_kwds={'label': "Percentage", 'orientation': "vertical"})
         ax.set_title(f"NYC {cat.replace('_pct','').capitalize()} Incidents (%)", fontsize=14)
         ax.axis('off')
     plt.tight_layout()
@@ -461,6 +529,9 @@ def zip_code_maps(incident_df, nyc_gdf):
 
 def zip_code_heatmap(incident_df, nyc_gdf):
     st.subheader("ZIP Code Sentiment Heatmap")
+    if 'Incident Zip' not in incident_df.columns:
+        st.warning("Incident Zip data not available for this visualization.")
+        return
     incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
     incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
     incident_sums['combined_sentiment'] = (incident_sums['positive'] - incident_sums['negative']) / incident_sums['total'].replace(0, 1)
@@ -468,7 +539,7 @@ def zip_code_heatmap(incident_df, nyc_gdf):
     merged_gdf['combined_sentiment'] = merged_gdf['combined_sentiment'].fillna(0)
     fig, ax = plt.subplots(1, 1, figsize=(12, 10))
     merged_gdf.plot(column='combined_sentiment', cmap='RdYlBu_r', linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
-                     legend_kwds={'label': "Sentiment Score", 'orientation': "vertical"})
+                    legend_kwds={'label': "Sentiment Score", 'orientation': "vertical"})
     ax.set_title("NYC Sentiment Heatmap 2020", fontsize=16)
     ax.axis('off')
     plt.tight_layout()
@@ -479,9 +550,8 @@ def zip_code_heatmap(incident_df, nyc_gdf):
 
 def borough_income_chart(df):
     st.subheader("Average Median Income by NYC Borough")
-    # Added a robust check for the 'median_income' column
     if 'median_income' not in df.columns:
-        st.error("Error: The selected dataset does not contain 'median_income' data for this visualization.")
+        st.warning("Median Income data not available for this visualization.")
         return
     zip_column = 'Incident Zip' if 'Incident Zip' in df.columns else 'incident_zip' if 'incident_zip' in df.columns else 'zip_code'
     borough_map = {
@@ -515,10 +585,8 @@ def borough_income_chart(df):
     st.pyplot(fig)
     plt.close(fig)
 
-# =========================
-# Combined Prediction Page
-# =========================
-def combined_prediction_page():
+# -------------------- COMBINED PREDICTION PAGE --------------------
+def combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer):
     st.title("Tweet Sentiment and Emotion Predictor")
     cleaner = MemoryOptimizedTweetCleaner()
     tweet = st.text_area("Write a tweet:", key="tweet_input_combined")
@@ -548,14 +616,21 @@ def combined_prediction_page():
                 st.write("Prediction: Unable to predict (invalid or empty tweet after cleaning)")
         else:
             st.write("Please enter a tweet to predict.")
-            
-# =========================
-# MAIN APP LOGIC
-# =========================
 
+# -------------------- MAIN APP LOGIC --------------------
 def main():
+    st.set_page_config(
+        page_title="Twitter Sentiment Analysis",
+        page_icon="🐦",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
     st.title("🐦 Twitter Sentiment Analysis Dashboard")
-    st.markdown("---")
+    st.markdown("This application analyzes Twitter data to visualize sentiment and emotions related to different topics.")
+    st.write(f"Current memory usage: {MemoryMonitor.get_memory_usage():.2f} MB")
+    if MemoryMonitor.get_memory_usage() > 400:
+        st.warning("High memory usage detected. Consider clearing memory or selecting a different dataset.")
 
     if 'df' not in st.session_state:
         st.session_state['df'] = None
@@ -575,29 +650,52 @@ def main():
         placeholder="Choose a dataset"
     )
     
-    if st.sidebar.button("Load Dataset"):
-        if dataset_choice:
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("Clear Memory"):
+            st.session_state['df'] = None
+            st.session_state['incident_df'] = None
+            st.session_state['nyc_gdf'] = None
+            st.session_state['current_dataset_choice'] = None
+            st.cache_data.clear()
+            MemoryMonitor.force_garbage_collection()
+            st.success("Memory cleared! You can now load a new dataset.")
+    
+    with col2:
+        if st.button("Load Dataset", disabled=not dataset_choice):
             if dataset_choice != st.session_state.get('current_dataset_choice'):
                 st.session_state['current_dataset_choice'] = dataset_choice
                 st.session_state['df'] = None
                 st.session_state['incident_df'] = None
                 st.session_state['nyc_gdf'] = None
                 st.cache_data.clear()
-                gc.collect()
+                MemoryMonitor.force_garbage_collection()
+            
+            try:
+                with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
+                    st.session_state['df'] = load_data(dataset_choice)
+                with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
+                    st.session_state['incident_df'] = load_incident_data(dataset_choice)
+                st.write(f"**Main Dataset Info ({dataset_choice}):**")
+                st.write(f"Rows: {st.session_state['df'].shape[0]:,}")
+                st.write(f"Columns: {list(st.session_state['df'].columns)}")
+                st.write(f"**Incident Dataset Info ({dataset_choice}):**")
+                st.write(f"Rows: {st.session_state['incident_df'].shape[0]:,}")
+                st.write(f"Columns: {list(st.session_state['incident_df'].columns)}")
+                if st.session_state['df'].empty or st.session_state['incident_df'].empty:
+                    st.error("One or both datasets are empty. Check Google Drive file accessibility or file content.")
+                else:
+                    st.success(f"Data for '{dataset_choice}' has been loaded!")
+            except Exception as e:
+                st.error(f"Failed to load dataset '{dataset_choice}': {e}")
+                st.session_state['df'] = None
+                st.session_state['incident_df'] = None
+                st.session_state['current_dataset_choice'] = None
 
-            with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
-                st.session_state['df'] = load_data(dataset_choice)
-            with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
-                st.session_state['incident_df'] = load_incident_data(dataset_choice)
-            st.success(f"Data for '{dataset_choice}' has been loaded!")
-        else:
-            st.sidebar.warning("Please select a dataset first.")
-
-    if st.session_state.df is None:
+    if st.session_state['df'] is None or st.session_state['df'].empty:
         st.info("Please select a dataset from the sidebar and click 'Load Dataset' to begin.")
     else:
         st.sidebar.markdown("---")
-        # Updated radio button list to separate all advanced visualizations
         visualization_choice = st.sidebar.radio(
             "Choose a visualization:", 
             [
@@ -621,55 +719,45 @@ def main():
         )
         st.header(f"Visualizing: {st.session_state['current_dataset_choice']}")
 
-        # Load geographic data only when needed for map visualizations
         if visualization_choice in [
             "🗺 ZIP Code Sentiment Maps", 
             "🗺 ZIP Code Sentiment Heatmap", 
             "💰 Average Median Income by Borough"
         ]:
-            if st.session_state.nyc_gdf is None:
+            if st.session_state['nyc_gdf'] is None:
                 with st.spinner("Loading geographic data..."):
                     st.session_state['nyc_gdf'] = load_shapefile()
 
-        # Updated if/elif block to call the new, separate visualization functions
         if visualization_choice == "📈 Overall Sentiment Pie Chart":
-            sentiment_pie_chart(st.session_state.df)
+            sentiment_pie_chart(st.session_state['df'])
         elif visualization_choice == "😄 Overall Emotion Pie Chart":
-            emotion_pie_chart(st.session_state.df)
+            emotion_pie_chart(st.session_state['df'])
         elif visualization_choice == "🗺 Tweet Sentiment Map":
-            sentiment_map(st.session_state.df)
+            sentiment_map(st.session_state['df'])
         elif visualization_choice == "🗺 Tweet Emotion Map":
-            emotion_map(st.session_state.df)
+            emotion_map(st.session_state['df'])
         elif visualization_choice == "📊 Top Emotions Pie Chart":
-            top_emotions_pie_chart(st.session_state.df)
+            top_emotions_pie_chart(st.session_state['df'])
         elif visualization_choice == "📊 Emotion by Sentiment Bar Chart":
-            emotion_sentiment_bar_chart(st.session_state.df)
+            emotion_sentiment_bar_chart(st.session_state['df'])
         elif visualization_choice == "📊 Emotion Confidence Box Plot":
-            emotion_confidence_boxplot(st.session_state.df)
+            emotion_confidence_boxplot(st.session_state['df'])
         elif visualization_choice == "🗺 Geographical Sentiment Scatter Plot":
-            geo_sentiment_scatterplot(st.session_state.df)
+            geo_sentiment_scatterplot(st.session_state['df'])
         elif visualization_choice == "📊 Median Income Histogram":
-            median_income_histogram(st.session_state.df)
+            median_income_histogram(st.session_state['df'])
         elif visualization_choice == "📈 Sentiment Trends Line Chart":
-            sentiment_trends_line_chart(st.session_state.df)
+            sentiment_trends_line_chart(st.session_state['df'])
         elif visualization_choice == "🔥 Emotion vs Sentiment Heatmap":
-            emotion_sentiment_heatmap(st.session_state.df)
+            emotion_sentiment_heatmap(st.session_state['df'])
         elif visualization_choice == "🗺 ZIP Code Sentiment Maps":
-            zip_code_maps(st.session_state.incident_df, st.session_state.nyc_gdf)
+            zip_code_maps(st.session_state['incident_df'], st.session_state['nyc_gdf'])
         elif visualization_choice == "🗺 ZIP Code Sentiment Heatmap":
-            zip_code_heatmap(st.session_state.incident_df, st.session_state.nyc_gdf)
+            zip_code_heatmap(st.session_state['incident_df'], st.session_state['nyc_gdf'])
         elif visualization_choice == "💰 Average Median Income by Borough":
-            borough_income_chart(st.session_state.df)
-
+            borough_income_chart(st.session_state['incident_df'])
 
 if __name__ == '__main__':
-    st.set_page_config(
-        page_title="Twitter Sentiment Analysis",
-        page_icon="🐦",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-
     sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer = load_all_models_cached()
     
     if sentiment_model is None:
@@ -686,6 +774,4 @@ if __name__ == '__main__':
     if page == "📊 Sentiment Analysis Dashboard":
         main()
     elif page == "🔍 Combined Prediction":
-        combined_prediction_page()
-
-
+        combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer)
