@@ -687,4 +687,3 @@ if __name__ == '__main__':
         main()
     elif page == "🔍 Combined Prediction":
         combined_prediction_page()
-
