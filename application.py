@@ -559,7 +559,7 @@ def main():
 
     if 'df' not in st.session_state:
         st.session_state['df'] = None
-    if 'incident_df' not in st.session_state:
+    if 'incident_df' not in in st.session_state:
         st.session_state['incident_df'] = None
     if 'nyc_gdf' not in st.session_state:
         st.session_state['nyc_gdf'] = None
@@ -578,10 +578,19 @@ def main():
     if st.sidebar.button("Load Dataset"):
         if dataset_choice:
             if dataset_choice != st.session_state.get('current_dataset_choice'):
+                
+                # Aggressively clear old dataframes to free up memory before loading new ones
+                if 'df' in st.session_state:
+                    del st.session_state['df']
+                if 'incident_df' in st.session_state:
+                    del st.session_state['incident_df']
+                if 'nyc_gdf' in st.session_state:
+                    del st.session_state['nyc_gdf']
+                
+                # Force garbage collection
+                gc.collect()
+
                 st.session_state['current_dataset_choice'] = dataset_choice
-                st.session_state['df'] = None
-                st.session_state['incident_df'] = None
-                st.session_state['nyc_gdf'] = None
                 st.cache_data.clear()
                 gc.collect()
 
