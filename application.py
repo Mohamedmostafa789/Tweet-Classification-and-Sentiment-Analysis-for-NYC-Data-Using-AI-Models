@@ -175,14 +175,19 @@ class MemoryMonitor:
         logger.info(f"Memory usage after GC: {MemoryMonitor.get_memory_usage():.2f} MB")
 
 @st.cache_data(max_entries=1)
+@st.cache_data(max_entries=1)
 def load_data(dataset_key: str) -> pd.DataFrame:
+    if MemoryMonitor.get_memory_usage() > 400:
+        logger.warning("High memory usage before loading dataset. Clearing caches.")
+        st.cache_data.clear()
+        MemoryMonitor.force_garbage_collection()
     file_info = DATASET_FILES[dataset_key]
     path = DATA_DIR / file_info["name"]
     download_from_drive(file_info["id"], path)
     
     try:
         chunk_size = 10000
-        max_rows = 50000
+        max_rows = 20000  # Reduced from 50000
         chunks = []
         rows_loaded = 0
         
@@ -223,13 +228,17 @@ def load_data(dataset_key: str) -> pd.DataFrame:
 
 @st.cache_data(max_entries=1)
 def load_incident_data(incident_key: str) -> pd.DataFrame:
+    if MemoryMonitor.get_memory_usage() > 400:
+        logger.warning("High memory usage before loading incident data. Clearing caches.")
+        st.cache_data.clear()
+        MemoryMonitor.force_garbage_collection()
     file_info = INCIDENT_FILES[incident_key]
     path = DATA_DIR / file_info["name"]
     download_from_drive(file_info["id"], path)
     
     try:
         chunk_size = 10000
-        max_rows = 50000
+        max_rows = 20000  # Reduced from 50000
         chunks = []
         rows_loaded = 0
         
@@ -751,6 +760,10 @@ def main() -> None:
         st.subheader("Dashboard")
         if 'current_dataset_choice' not in st.session_state:
             st.session_state['current_dataset_choice'] = None
+        if 'df' not in st.session_state:
+            st.session_state['df'] = None
+        if 'incident_df' not in st.session_state:
+            st.session_state['incident_df'] = None
 
         with st.container(border=True):
             st.subheader("1. Load Data")
@@ -758,53 +771,33 @@ def main() -> None:
                 "Select a dataset to load:", 
                 list(DATASET_FILES.keys()),
                 index=None,
-                placeholder="Choose a dataset"
+                placeholder="Choose a dataset",
+                key="dataset_selector"
             )
             
-            if st.button("Clear Memory"):
-                if 'df' in st.session_state:
-                    del st.session_state['df']
-                if 'incident_df' in st.session_state:
-                    del st.session_state['incident_df']
-                if 'nyc_gdf' in st.session_state:
-                    del st.session_state['nyc_gdf']
-                st.cache_data.clear()
-                st.cache_resource.clear()
-                MemoryMonitor.force_garbage_collection()
-                st.session_state['current_dataset_choice'] = None
-                st.success("Memory cleared! You can now load a new dataset.")
-
-            if st.button("Load Dataset"):
-                if dataset_choice:
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Clear Memory"):
+                    st.session_state['df'] = None
+                    st.session_state['incident_df'] = None
+                    st.session_state['nyc_gdf'] = None
+                    st.session_state['current_dataset_choice'] = None
+                    st.cache_data.clear()
+                    st.cache_resource.clear()
+                    MemoryMonitor.force_garbage_collection()
+                    st.success("Memory cleared! You can now load a new dataset.")
+            
+            with col2:
+                if st.button("Load Dataset", disabled=not dataset_choice):
                     if dataset_choice != st.session_state['current_dataset_choice']:
-                        st.warning(f"Switching to '{dataset_choice}' will clear previous data to free memory. Continue?")
-                        if st.button("Confirm"):
-                            if 'df' in st.session_state:
-                                del st.session_state['df']
-                            if 'incident_df' in st.session_state:
-                                del st.session_state['incident_df']
-                            if 'nyc_gdf' in st.session_state:
-                                del st.session_state['nyc_gdf']
-                            st.cache_data.clear()
-                            st.cache_resource.clear()
-                            MemoryMonitor.force_garbage_collection()
-                            st.session_state['current_dataset_choice'] = dataset_choice
-                            with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
-                                st.session_state['df'] = load_data(dataset_choice)
-                            with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
-                                st.session_state['incident_df'] = load_incident_data(dataset_choice)
-                            # Debugging output
-                            st.write(f"**Main Dataset Info ({dataset_choice}):**")
-                            st.write(f"Rows: {st.session_state['df'].shape[0]:,}")
-                            st.write(f"Columns: {list(st.session_state['df'].columns)}")
-                            st.write(f"**Incident Dataset Info ({dataset_choice}):**")
-                            st.write(f"Rows: {st.session_state['incident_df'].shape[0]:,}")
-                            st.write(f"Columns: {list(st.session_state['incident_df'].columns)}")
-                            if st.session_state['df'].empty or st.session_state['incident_df'].empty:
-                                st.error("One or both datasets are empty. Check Google Drive file accessibility or file content.")
-                            else:
-                                st.success(f"Data for '{dataset_choice}' has been loaded!")
-                    else:
+                        st.session_state['df'] = None
+                        st.session_state['incident_df'] = None
+                        st.session_state['nyc_gdf'] = None
+                        st.cache_data.clear()
+                        st.cache_resource.clear()
+                        MemoryMonitor.force_garbage_collection()
+                        st.session_state['current_dataset_choice'] = dataset_choice
+                    try:
                         with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
                             st.session_state['df'] = load_data(dataset_choice)
                         with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
@@ -820,10 +813,15 @@ def main() -> None:
                             st.error("One or both datasets are empty. Check Google Drive file accessibility or file content.")
                         else:
                             st.success(f"Data for '{dataset_choice}' has been loaded!")
-                else:
+                    except Exception as e:
+                        st.error(f"Failed to load dataset '{dataset_choice}': {e}")
+                        st.session_state['df'] = None
+                        st.session_state['incident_df'] = None
+                        st.session_state['current_dataset_choice'] = None
+                elif not dataset_choice:
                     st.warning("Please select a dataset first.")
-        
-        if 'df' not in st.session_state or st.session_state.get('df') is None:
+
+        if st.session_state['df'] is None or st.session_state['df'].empty:
             st.info("Please select a dataset above and click 'Load Dataset' to begin visualizing the data.")
         else:
             st.header(f"Visualizing: {st.session_state['current_dataset_choice']} Data")
@@ -954,7 +952,6 @@ def main() -> None:
 ### Tweet Classification and Sentiment Analysis for NYC Data Using AI Models
 **Mohamed Mostafa**
 **August 12, 2025**
-
 ---
 
 ### Data Cleaning and Preprocessing
@@ -1086,4 +1083,5 @@ This project processed ~24M NYC tweets, overcoming noise and multilingual challe
 
 if __name__ == '__main__':
     main()
+
 
