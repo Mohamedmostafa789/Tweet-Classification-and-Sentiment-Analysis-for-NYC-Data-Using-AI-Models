@@ -313,3 +313,4 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"An unexpected error occurred in main execution: {e}", exc_info=True)
         st.error(f"An unexpected error occurred: {e}. Please check the logs.")
+
