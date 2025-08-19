@@ -1,13 +1,9 @@
 #
-# FINAL, COMPLETE, AND PROFESSIONAL VERSION OF application.py
+# UPDATED application.py
 #
-# This file contains the entire 1022 lines of your original code,
-# with a new, professional safeguard at the beginning to prevent crashes
-# on free-tier hosting services.
-#
-# The code will now intelligently check for available memory and
-# either process your full data (if resources allow) or use a
-# small, in-memory sample to ensure stability.
+# This file has been updated to use the Google Drive IDs found
+# within the code you provided. It also includes the professional
+# memory safeguard from the previous version to ensure stable operation.
 #
 
 import streamlit as st
@@ -53,7 +49,6 @@ def check_memory_and_mode():
         logger.info(f"Available memory: {available_mem_gb:.2f} GB")
 
         # Set a threshold (e.g., 8 GB for large data processing)
-        # This threshold is an estimate; you can adjust it for your hosting service.
         MEMORY_THRESHOLD_GB = 8
         if available_mem_gb < MEMORY_THRESHOLD_GB:
             logger.warning(
@@ -84,21 +79,23 @@ SHAPEFILE_PATH = SHAPE_DIR / "tl_2020_us_zcta510.shp"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SHAPE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Google Drive IDs for the files
-# IMPORTANT: REPLACE THESE PLACEHOLDER IDs WITH YOUR ACTUAL IDs
+# These are the Google Drive IDs from the file you provided.
+# No need to change these.
 GD_SENTIMENT_MODEL_ID = "1lzZf79LGcB1J5SQsMh_mi1Jv_8V2q6K9"
 GD_SENTIMENT_VECTORIZER_ID = "12wRG57vERpdKgCaTiNyLiWC71KLWABK8"
+GD_EMOTION_MODEL_ID = "1NZCZKMhTSKvFJMuW_kxmX1OrkEQLFgs0"
 GD_EMOTION_VECTORIZER_ID = "1TKR2xmNcouAb8XyQz6VANixFLNZ9YsJV"
-GD_TWEET_DATA_ID = "YOUR_TWEET_DATA_ID_HERE"
-GD_INCIDENT_DATA_ID = "YOUR_INCIDENT_DATA_ID_HERE"
-GD_SHAPEFILE_ID = "YOUR_SHAPEFILE_ID_HERE"
+GD_TWEET_DATA_ID = "1KhQvyglx07Lx4hD971956IikHhZKcczS"
+GD_INCIDENT_DATA_ID = "1IbIfdrAU3ZYue5joLojPisRX3JJjwdvM"
+GD_SHAPEFILE_ID = "1AwweXBE1Xq8_byFKfT61AaFjhNWlaftI"
 
 # Local file names
 SENTIMENT_MODEL_FILE = "sentiment_model_large.pkl"
 SENTIMENT_VECTORIZER_FILE = "vectorizer_large.pkl"
+EMOTION_MODEL_FILE = "emotion_model_large.pkl"
 EMOTION_VECTORIZER_FILE = "emotion_vectorizer_large.pkl"
-TWEET_DATA_FILE = "nyc_tweets_data.csv"
-INCIDENT_DATA_FILE = "nyc_incidents.csv"
+TWEET_DATA_FILE = "sample_twitter_data_covid_classified.csv"
+INCIDENT_DATA_FILE = "Incident Zip_covid_classified.csv"
 
 # -------------------- UTILITY FUNCTIONS --------------------
 def download_from_google_drive(file_id, output_path):
@@ -116,7 +113,7 @@ def download_from_google_drive(file_id, output_path):
     except Exception as e:
         logger.error(f"Failed to download file from Google Drive: {e}", exc_info=True)
         st.error(
-            f"Failed to download a required file. Please check the Google Drive ID. Details: {e}"
+            f"Failed to download a required file. Please check the Google Drive ID and file permissions. Details: {e}"
         )
         st.stop()
 
