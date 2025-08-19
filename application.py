@@ -130,7 +130,7 @@ def load_incident_data(incident_key: str) -> pd.DataFrame:
     file_info = INCIDENT_FILES[incident_key]
     path = DATA_DIR / file_info["name"]
     try:
-        download_from_drive(file_info["id"], path)
+        download_from_drive(file_id=info["id"], output_path=path)
         incident_df = pd.read_csv(path, low_memory=False)
         if 'Incident Zip' in incident_df.columns:
             incident_df['Incident Zip'] = incident_df['Incident Zip'].astype(str).str.zfill(5)
@@ -202,13 +202,6 @@ def combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_mode
 
 # -------------------- MAIN APP LOGIC --------------------
 def main():
-    st.set_page_config(
-        page_title="Twitter Sentiment Analysis",
-        page_icon="🐦",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
     st.title("🐦 Twitter Sentiment Analysis Dashboard")
     st.markdown("Analyze Twitter data for sentiment insights.")
 
@@ -277,6 +270,13 @@ def main():
             sentiment_pie_chart(st.session_state['df'])
 
 if __name__ == '__main__':
+    st.set_page_config(
+        page_title="Twitter Sentiment Analysis",
+        page_icon="🐦",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
     sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer = load_all_models_cached()
     
     if sentiment_model is None:
