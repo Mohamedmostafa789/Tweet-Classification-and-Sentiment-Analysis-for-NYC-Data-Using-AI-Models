@@ -419,38 +419,59 @@ def emotion_sentiment_heatmap(df: pd.DataFrame) -> None:
 
 def sentiment_pie_chart(df: pd.DataFrame) -> None:
     st.subheader("Sentiment Distribution")
-    value_counts = df['category'].value_counts()
-    labels = ['Positive', 'Neutral', 'Negative']
-    sizes = [value_counts.get(1, 0), value_counts.get(0, 0), value_counts.get(-1, 0)]
-    fig, ax = plt.subplots(figsize=(6, 6))
-    colors = ['#4CAF50', '#2196F3', '#F44336']
-    explode = (0.1, 0, 0)
-    ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', shadow=True, startangle=90)
-    ax.axis('equal')
-    st.pyplot(fig)
-    plt.close(fig)
-    del value_counts, sizes, labels, colors, explode
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** This simple pie chart provides a clear and direct summary...")
+    try:
+        if 'category' not in df.columns:
+            logger.error("Missing 'category' column in DataFrame")
+            st.warning("Sentiment data not available for this dataset.")
+            return
+        value_counts = df['category'].value_counts()
+        labels = ['Positive', 'Neutral', 'Negative']
+        sizes = [value_counts.get(1, 0), value_counts.get(0, 0), value_counts.get(-1, 0)]
+        if sum(sizes) == 0:
+            logger.error("No valid sentiment data in 'category' column")
+            st.warning("No valid sentiment data available for visualization.")
+            return
+        fig, ax = plt.subplots(figsize=(6, 6))
+        colors = ['#4CAF50', '#2196F3', '#F44336']
+        explode = (0.1, 0, 0)
+        ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', shadow=True, startangle=90)
+        ax.axis('equal')
+        st.pyplot(fig)
+        plt.close(fig)
+        del value_counts, sizes, labels, colors, explode
+        MemoryMonitor.force_garbage_collection()
+        st.markdown("**Explanation:** This simple pie chart provides a clear and direct summary...")
+    except Exception as e:
+        logger.error(f"Error in sentiment_pie_chart: {e}")
+        st.error(f"Failed to render sentiment pie chart: {e}")
 
 def emotion_pie_chart(df: pd.DataFrame) -> None:
     st.subheader("Emotion Distribution")
-    if 'emotion' not in df.columns or df['emotion'].isnull().all():
-        st.warning("Emotion data not available for this dataset.")
-        return
-    value_counts = df['emotion'].value_counts()
-    labels = value_counts.index.tolist()
-    sizes = value_counts.values.tolist()
-    fig, ax = plt.subplots(figsize=(6, 6))
-    colors = sns.color_palette("husl", len(labels))
-    explode = [0.1] + [0] * (len(labels) - 1)
-    ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', shadow=True, startangle=90)
-    ax.axis('equal')
-    st.pyplot(fig)
-    plt.close(fig)
-    del value_counts, labels, sizes, colors, explode
-    MemoryMonitor.force_garbage_collection()
-    st.markdown("**Explanation:** Similar to the sentiment chart, this pie chart provides a quick visual...")
+    try:
+        if 'emotion' not in df.columns or df['emotion'].isnull().all():
+            logger.error("Missing or empty 'emotion' column in DataFrame")
+            st.warning("Emotion data not available for this dataset.")
+            return
+        value_counts = df['emotion'].value_counts()
+        if value_counts.empty:
+            logger.error("No valid emotion data in 'emotion' column")
+            st.warning("No valid emotion data available for visualization.")
+            return
+        labels = value_counts.index.tolist()
+        sizes = value_counts.values.tolist()
+        fig, ax = plt.subplots(figsize=(6, 6))
+        colors = sns.color_palette("husl", len(labels))
+        explode = [0.1] + [0] * (len(labels) - 1)
+        ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', shadow=True, startangle=90)
+        ax.axis('equal')
+        st.pyplot(fig)
+        plt.close(fig)
+        del value_counts, labels, sizes, colors, explode
+        MemoryMonitor.force_garbage_collection()
+        st.markdown("**Explanation:** Similar to the sentiment chart, this pie chart provides a quick visual...")
+    except Exception as e:
+        logger.error(f"Error in emotion_pie_chart: {e}")
+        st.error(f"Failed to render emotion pie chart: {e}")
 
 def sentiment_map(df: pd.DataFrame) -> None:
     st.subheader("Geographical Sentiment Map (Sampled)")
@@ -772,13 +793,33 @@ def main() -> None:
                                 st.session_state['df'] = load_data(dataset_choice)
                             with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
                                 st.session_state['incident_df'] = load_incident_data(dataset_choice)
-                            st.success(f"Data for '{dataset_choice}' has been loaded!")
+                            # Debugging output
+                            st.write(f"**Main Dataset Info ({dataset_choice}):**")
+                            st.write(f"Rows: {st.session_state['df'].shape[0]:,}")
+                            st.write(f"Columns: {list(st.session_state['df'].columns)}")
+                            st.write(f"**Incident Dataset Info ({dataset_choice}):**")
+                            st.write(f"Rows: {st.session_state['incident_df'].shape[0]:,}")
+                            st.write(f"Columns: {list(st.session_state['incident_df'].columns)}")
+                            if st.session_state['df'].empty or st.session_state['incident_df'].empty:
+                                st.error("One or both datasets are empty. Check Google Drive file accessibility or file content.")
+                            else:
+                                st.success(f"Data for '{dataset_choice}' has been loaded!")
                     else:
                         with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
                             st.session_state['df'] = load_data(dataset_choice)
                         with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
                             st.session_state['incident_df'] = load_incident_data(dataset_choice)
-                        st.success(f"Data for '{dataset_choice}' has been loaded!")
+                        # Debugging output
+                        st.write(f"**Main Dataset Info ({dataset_choice}):**")
+                        st.write(f"Rows: {st.session_state['df'].shape[0]:,}")
+                        st.write(f"Columns: {list(st.session_state['df'].columns)}")
+                        st.write(f"**Incident Dataset Info ({dataset_choice}):**")
+                        st.write(f"Rows: {st.session_state['incident_df'].shape[0]:,}")
+                        st.write(f"Columns: {list(st.session_state['incident_df'].columns)}")
+                        if st.session_state['df'].empty or st.session_state['incident_df'].empty:
+                            st.error("One or both datasets are empty. Check Google Drive file accessibility or file content.")
+                        else:
+                            st.success(f"Data for '{dataset_choice}' has been loaded!")
                 else:
                     st.warning("Please select a dataset first.")
         
@@ -880,11 +921,19 @@ def main() -> None:
                 st.subheader("Data at a glance:")
                 st.write(st.session_state.df.head())
                 st.subheader("Dataset Shape:")
-                st.write(f"Rows: {st.session_state.df.shape[0]:,}")
-                st.write(f"Columns: {st.session_state.df.shape[1]}")
+                st.write(f"Rows: {st.session_state['df'].shape[0]:,}")
+                st.write(f"Columns: {st.session_state['df'].shape[1]}")
                 st.subheader("DataFrame Info:")
                 buffer = io.StringIO()
                 st.session_state.df.info(buf=buffer)
+                s = buffer.getvalue()
+                st.text(s)
+                st.subheader("Incident Data Summary:")
+                st.write(st.session_state.incident_df.head())
+                st.write(f"Rows: {st.session_state['incident_df'].shape[0]:,}")
+                st.write(f"Columns: {st.session_state['incident_df'].shape[1]}")
+                buffer = io.StringIO()
+                st.session_state.incident_df.info(buf=buffer)
                 s = buffer.getvalue()
                 st.text(s)
 
@@ -1037,3 +1086,4 @@ This project processed ~24M NYC tweets, overcoming noise and multilingual challe
 
 if __name__ == '__main__':
     main()
+
