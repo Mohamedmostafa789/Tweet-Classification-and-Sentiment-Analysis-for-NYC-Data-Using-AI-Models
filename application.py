@@ -18,6 +18,8 @@ import sys
 import io
 import os
 import gdown
+import time
+
 
 # Suppress all warnings for cleaner output
 warnings.filterwarnings('ignore')
@@ -175,22 +177,38 @@ class MemoryMonitor:
         logger.info(f"Memory usage after GC: {MemoryMonitor.get_memory_usage():.2f} MB")
 
 @st.cache_data(max_entries=1)
-@st.cache_data(max_entries=1)
 def load_data(dataset_key: str) -> pd.DataFrame:
     if MemoryMonitor.get_memory_usage() > 400:
         logger.warning("High memory usage before loading dataset. Clearing caches.")
         st.cache_data.clear()
         MemoryMonitor.force_garbage_collection()
+    
     file_info = DATASET_FILES[dataset_key]
     path = DATA_DIR / file_info["name"]
-    download_from_drive(file_info["id"], path)
     
     try:
+        # Log download start
+        logger.info(f"Starting download for '{dataset_key}' from Google Drive ID: {file_info['id']}")
+        start_time = time.time()
+        download_from_drive(file_info["id"], path)
+        download_time = time.time() - start_time
+        logger.info(f"Download completed for '{dataset_key}' in {download_time:.2f} seconds. File size: {path.stat().st_size / 1024 / 1024:.2f} MB")
+        
+        # Check file existence and size
+        if not path.exists() or path.stat().st_size == 0:
+            logger.error(f"Downloaded file '{path}' is missing or empty")
+            st.error(f"Failed to download dataset '{dataset_key}': File is missing or empty.")
+            return pd.DataFrame()
+        
+        # Load data with timeout
         chunk_size = 10000
-        max_rows = 20000  # Reduced from 50000
+        max_rows = 20000
         chunks = []
         rows_loaded = 0
+        total_rows_before_filter = 0
+        load_start_time = time.time()
         
+        logger.info(f"Reading CSV file '{path}' in chunks of {chunk_size} rows")
         for chunk in pd.read_csv(
             path,
             chunksize=chunk_size,
@@ -198,27 +216,32 @@ def load_data(dataset_key: str) -> pd.DataFrame:
             dtype={'latitude': 'float32', 'longitude': 'float32'},
             usecols=['latitude', 'longitude', 'date', 'emotion', 'category', 'cleaned_tweet', 'hashtags', 'median_income']
         ):
+            total_rows_before_filter += len(chunk)
             chunk = chunk.dropna(subset=['latitude', 'longitude'])
             chunk = chunk[(chunk['latitude'].between(-90, 90)) & (chunk['longitude'].between(-180, 180))]
             if 'date' in chunk.columns:
                 chunk['date'] = pd.to_datetime(chunk['date'], errors='coerce')
             chunks.append(chunk)
             rows_loaded += len(chunk)
-            if rows_loaded >= max_rows:
+            logger.info(f"Processed chunk: {len(chunk)} rows (total loaded: {rows_loaded})")
+            if rows_loaded >= max_rows or (time.time() - load_start_time) > 300:  # 5-minute timeout
+                logger.warning(f"Stopping data load for '{dataset_key}' after {rows_loaded} rows or timeout")
                 break
         
+        logger.info(f"Total rows before filtering for '{dataset_key}': {total_rows_before_filter}")
         if chunks:
             df = pd.concat(chunks, ignore_index=True)
             if len(df) > max_rows:
                 df = df.sample(n=max_rows, random_state=42)
-            logger.info(f"Loaded dataset '{dataset_key}' with {len(df)} rows")
+            logger.info(f"Loaded dataset '{dataset_key}' with {len(df)} rows after filtering")
         else:
-            logger.warning(f"No valid data loaded for '{dataset_key}'")
-            st.error(f"Failed to load dataset '{dataset_key}': No valid data after filtering.")
+            logger.warning(f"No valid data loaded for '{dataset_key}' after filtering")
+            st.error(f"Failed to load dataset '{dataset_key}': No valid data after filtering. Total rows before filtering: {total_rows_before_filter}")
             return pd.DataFrame()
         
         df.columns = [col.strip().lower().replace(' ', '_') for col in df.columns]
         MemoryMonitor.force_garbage_collection()
+        logger.info(f"Memory usage after loading '{dataset_key}': {MemoryMonitor.get_memory_usage():.2f} MB")
         return df
     
     except Exception as e:
@@ -232,16 +255,33 @@ def load_incident_data(incident_key: str) -> pd.DataFrame:
         logger.warning("High memory usage before loading incident data. Clearing caches.")
         st.cache_data.clear()
         MemoryMonitor.force_garbage_collection()
+    
     file_info = INCIDENT_FILES[incident_key]
     path = DATA_DIR / file_info["name"]
-    download_from_drive(file_info["id"], path)
     
     try:
+        # Log download start
+        logger.info(f"Starting download for incident data '{incident_key}' from Google Drive ID: {file_info['id']}")
+        start_time = time.time()
+        download_from_drive(file_info["id"], path)
+        download_time = time.time() - start_time
+        logger.info(f"Download completed for incident data '{incident_key}' in {download_time:.2f} seconds. File size: {path.stat().st_size / 1024 / 1024:.2f} MB")
+        
+        # Check file existence and size
+        if not path.exists() or path.stat().st_size == 0:
+            logger.error(f"Downloaded file '{path}' is missing or empty")
+            st.error(f"Failed to download incident data '{incident_key}': File is missing or empty.")
+            return pd.DataFrame()
+        
+        # Load data with timeout
         chunk_size = 10000
-        max_rows = 20000  # Reduced from 50000
+        max_rows = 20000
         chunks = []
         rows_loaded = 0
+        total_rows_before_filter = 0
+        load_start_time = time.time()
         
+        logger.info(f"Reading CSV file '{path}' in chunks of {chunk_size} rows")
         for chunk in pd.read_csv(
             path,
             chunksize=chunk_size,
@@ -249,31 +289,34 @@ def load_incident_data(incident_key: str) -> pd.DataFrame:
             dtype={'Incident Zip': 'str'},
             usecols=['Incident Zip', 'negative', 'positive', 'neutral']
         ):
+            total_rows_before_filter += len(chunk)
             chunk['Incident Zip'] = chunk['Incident Zip'].astype(str).str.zfill(5)
             chunks.append(chunk)
             rows_loaded += len(chunk)
-            if rows_loaded >= max_rows:
+            logger.info(f"Processed chunk: {len(chunk)} rows (total loaded: {rows_loaded})")
+            if rows_loaded >= max_rows or (time.time() - load_start_time) > 300:  # 5-minute timeout
+                logger.warning(f"Stopping incident data load for '{incident_key}' after {rows_loaded} rows or timeout")
                 break
         
+        logger.info(f"Total rows before filtering for incident data '{incident_key}': {total_rows_before_filter}")
         if chunks:
             incident_df = pd.concat(chunks, ignore_index=True)
             if len(incident_df) > max_rows:
                 incident_df = incident_df.sample(n=max_rows, random_state=42)
-            logger.info(f"Loaded incident data '{incident_key}' with {len(incident_df)} rows")
+            logger.info(f"Loaded incident data '{incident_key}' with {len(incident_df)} rows after filtering")
         else:
-            logger.warning(f"No valid data loaded for '{incident_key}'")
-            st.error(f"Failed to load incident data '{incident_key}': No valid data.")
+            logger.warning(f"No valid data loaded for incident data '{incident_key}'")
+            st.error(f"Failed to load incident data '{incident_key}': No valid data. Total rows before filtering: {total_rows_before_filter}")
             return pd.DataFrame()
         
         MemoryMonitor.force_garbage_collection()
+        logger.info(f"Memory usage after loading incident data '{incident_key}': {MemoryMonitor.get_memory_usage():.2f} MB")
         return incident_df
     
     except Exception as e:
         logger.error(f"Error loading incident data '{incident_key}': {e}")
         st.error(f"Failed to load incident data '{incident_key}': {e}")
         return pd.DataFrame()
-
-@st.cache_resource(max_entries=1)
 def load_shapefile() -> gpd.GeoDataFrame:
     for sf in SHAPE_FILES:
         path = SHAPE_DIR / sf["name"]
@@ -1083,5 +1126,6 @@ This project processed ~24M NYC tweets, overcoming noise and multilingual challe
 
 if __name__ == '__main__':
     main()
+
 
 
