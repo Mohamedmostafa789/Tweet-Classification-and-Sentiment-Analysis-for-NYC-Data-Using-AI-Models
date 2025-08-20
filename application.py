@@ -701,14 +701,11 @@ def main():
     st.title("🐦 Twitter Sentiment Analysis Dashboard")
     st.markdown("---")
 
-    if 'df' not in st.session_state:
-        st.session_state['df'] = None
-    if 'incident_df' not in st.session_state:
-        st.session_state['incident_df'] = None
-    if 'nyc_gdf' not in st.session_state:
-        st.session_state['nyc_gdf'] = None
-    if 'current_dataset_choice' not in st.session_state:
-        st.session_state['current_dataset_choice'] = None
+    # This is the fix: use setdefault to guarantee keys exist at the start of every run.
+    st.session_state.setdefault('df', None)
+    st.session_state.setdefault('incident_df', None)
+    st.session_state.setdefault('nyc_gdf', None)
+    st.session_state.setdefault('current_dataset_choice', None)
 
     st.sidebar.title("Data and View Options")
     
@@ -721,22 +718,20 @@ def main():
     
     if st.sidebar.button("Load Dataset"):
         if dataset_choice:
+            # Check if the user is loading a different dataset to clear the cache.
             if dataset_choice != st.session_state.get('current_dataset_choice'):
+                # Aggressively clear old dataframes by updating the session state.
+                st.session_state['df'] = None
+                st.session_state['incident_df'] = None
+                st.session_state['nyc_gdf'] = None
                 
-                # Aggressively clear old dataframes to free up memory before loading new ones
-                if 'df' in st.session_state:
-                    del st.session_state['df']
-                if 'incident_df' in st.session_state:
-                    del st.session_state['incident_df']
-                if 'nyc_gdf' in st.session_state:
-                    del st.session_state['nyc_gdf']
+                # Clear the cache for the cached functions.
+                st.cache_data.clear()
                 
-                # Force garbage collection
+                # Force garbage collection to free up memory
                 gc.collect()
 
-                st.session_state['current_dataset_choice'] = dataset_choice
-                st.cache_data.clear()
-                gc.collect()
+            st.session_state['current_dataset_choice'] = dataset_choice
 
             with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
                 st.session_state['df'] = load_data(dataset_choice)
@@ -797,6 +792,7 @@ def main():
                 "🗺 ZIP Code Sentiment Heatmap", 
                 "💰 Average Median Income by Borough"
             ]:
+                # This check now works correctly because nyc_gdf is guaranteed to be in state
                 if st.session_state.nyc_gdf is None:
                     with st.spinner("Loading geographic data..."):
                         st.session_state['nyc_gdf'] = load_shapefile()
