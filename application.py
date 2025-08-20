@@ -426,6 +426,9 @@ def emotion_map(df):
 
 def zip_code_maps(incident_df, nyc_gdf):
     st.subheader("ZIP Code Sentiment Maps")
+    if nyc_gdf is None:
+        st.warning("Please load the geographic data from the sidebar to view this map.")
+        return
     incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
     incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
     for col in ['negative', 'positive', 'neutral']:
@@ -463,6 +466,9 @@ def zip_code_maps(incident_df, nyc_gdf):
 
 def zip_code_heatmap(incident_df, nyc_gdf):
     st.subheader("ZIP Code Sentiment Heatmap")
+    if nyc_gdf is None:
+        st.warning("Please load the geographic data from the sidebar to view this map.")
+        return
     incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
     incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
     incident_sums['combined_sentiment'] = (incident_sums['positive'] - incident_sums['negative']) / incident_sums['total'].replace(0, 1)
@@ -546,7 +552,7 @@ def combined_prediction_page():
                 st.write(f"Sentiment Prediction: {sentiment_label_map[sentiment_prediction]} (Confidence: {sentiment_conf:.2f})")
                 st.write(f"Emotion Prediction: {emotion_label} (Confidence: {emotion_conf:.2f})")
             else:
-                st.write("Cleaned Tweet: No valid content after cleaning")
+                st.write("Cleaned Tweet:", "No valid content after cleaning")
                 st.write("Prediction: Unable to predict (invalid or empty tweet after cleaning)")
         else:
             st.write("Please enter a tweet to predict.")
@@ -723,7 +729,6 @@ def main():
                 # Aggressively clear old dataframes by updating the session state.
                 st.session_state['df'] = None
                 st.session_state['incident_df'] = None
-                st.session_state['nyc_gdf'] = None
                 
                 # Clear the cache for the cached functions.
                 st.cache_data.clear()
@@ -740,6 +745,14 @@ def main():
             st.success(f"Data for '{dataset_choice}' has been loaded!")
         else:
             st.sidebar.warning("Please select a dataset first.")
+
+    # New button for explicitly loading the large geographic data
+    st.sidebar.markdown("---")
+    st.sidebar.info("Geographic maps require an additional data file.")
+    if st.sidebar.button("Load Geographic Data"):
+        with st.spinner("Loading NYC shapefile... this may take a moment."):
+            st.session_state['nyc_gdf'] = load_shapefile()
+        st.sidebar.success("Geographic data loaded successfully!")
 
     if st.session_state.df is None:
         st.info("Please select a dataset from the sidebar and click 'Load Dataset' to begin.")
@@ -785,17 +798,6 @@ def main():
                 ]
             )
             st.header(f"Visualizing: {st.session_state['current_dataset_choice']}")
-
-            # Load geographic data only when needed for map visualizations
-            if visualization_choice in [
-                "🗺 ZIP Code Sentiment Maps", 
-                "🗺 ZIP Code Sentiment Heatmap", 
-                "💰 Average Median Income by Borough"
-            ]:
-                # This check now works correctly because nyc_gdf is guaranteed to be in state
-                if st.session_state.nyc_gdf is None:
-                    with st.spinner("Loading geographic data..."):
-                        st.session_state['nyc_gdf'] = load_shapefile()
 
             # Updated if/elif block to call the new, separate visualization functions
             if visualization_choice == "📈 Overall Sentiment Pie Chart":
