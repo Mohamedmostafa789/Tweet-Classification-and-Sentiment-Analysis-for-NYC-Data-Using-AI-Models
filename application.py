@@ -3,26 +3,19 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-import gc
 import plotly.express as px
 import geopandas as gpd
 import joblib
 import re
 import logging
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor
-from tqdm import tqdm
-import time
 import os
 import psutil
 import tempfile
 import gdown
 from pathlib import Path
-from queue import Queue
 import warnings
 from typing import Optional, Dict, List, Tuple
-import threading
-import sys
 
 # Suppress all warnings for cleaner output
 warnings.filterwarnings('ignore')
@@ -90,7 +83,7 @@ TOPIC_DATA_MAP = {
 # -------------------- UTILITY FUNCTIONS --------------------
 
 @st.cache_resource(show_spinner=False)
-def get_file_content(file_id: str, file_name: str) -> Path:
+def get_file_content(file_id: str, file_name: str) -> Optional[Path]:
     """
     Downloads a file from Google Drive if it doesn't already exist.
     """
@@ -197,16 +190,16 @@ def load_all_models_cached():
 
         # Download files if they don't exist locally
         for key, file_id in model_ids.items():
-            file_name = f"{key}_large.pkl"
+            file_name = f"{key}.pkl" # Use a consistent naming convention
             filepath = DATA_DIR / file_name
             if not filepath.exists():
                 get_file_content(file_id, file_name)
 
         # Load the models and vectorizers
-        sentiment_model = joblib.load(DATA_DIR / 'sentiment_model_large.pkl')
-        sentiment_vectorizer = joblib.load(DATA_DIR / 'vectorizer_large.pkl')
-        emotion_model = joblib.load(DATA_DIR / 'emotion_model_large.pkl')
-        emotion_vectorizer = joblib.load(DATA_DIR / 'emotion_vectorizer_large.pkl')
+        sentiment_model = joblib.load(DATA_DIR / 'sentiment_model.pkl')
+        sentiment_vectorizer = joblib.load(DATA_DIR / 'sentiment_vectorizer.pkl') # Corrected file name
+        emotion_model = joblib.load(DATA_DIR / 'emotion_model.pkl')
+        emotion_vectorizer = joblib.load(DATA_DIR / 'emotion_vectorizer.pkl')
 
         logger.info("Successfully loaded all ML resources.")
         return sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer
@@ -286,7 +279,6 @@ def create_pie_chart(df: pd.DataFrame, title: str):
         color_discrete_sequence=['red', 'green', 'blue']
     )
     st.plotly_chart(fig)
-    gc.collect()
 
 def create_bar_chart(df: pd.DataFrame, title: str, x_col: str, y_col: str):
     """
@@ -295,7 +287,6 @@ def create_bar_chart(df: pd.DataFrame, title: str, x_col: str, y_col: str):
     st.subheader(title)
     fig = px.bar(df, x=x_col, y=y_col, title=title)
     st.plotly_chart(fig)
-    gc.collect()
 
 def create_line_chart(df: pd.DataFrame, title: str, x_col: str, y_col: str, color_col: str):
     """
@@ -304,7 +295,6 @@ def create_line_chart(df: pd.DataFrame, title: str, x_col: str, y_col: str, colo
     st.subheader(title)
     fig = px.line(df, x=x_col, y=y_col, color=color_col, title=title)
     st.plotly_chart(fig)
-    gc.collect()
 
 def create_scatter_chart(df: pd.DataFrame, title: str):
     """
@@ -323,7 +313,6 @@ def create_scatter_chart(df: pd.DataFrame, title: str):
 
     fig = px.scatter(df_sample, x='sentiment', y='emotion', title=title, color='sentiment')
     st.plotly_chart(fig)
-    gc.collect()
 
 def sentiment_emotion_correlation(df: pd.DataFrame):
     """
@@ -368,7 +357,6 @@ def sentiment_emotion_correlation(df: pd.DataFrame):
         color_discrete_map={'positive': 'green', 'negative': 'red', 'neutral': 'blue'}
     )
     st.plotly_chart(fig2)
-    gc.collect()
 
 def emotion_sentiment_heatmap(df: pd.DataFrame):
     """
@@ -395,7 +383,6 @@ def emotion_sentiment_heatmap(df: pd.DataFrame):
     ax.set_ylabel('Emotion')
     st.pyplot(fig)
     plt.close(fig)
-    gc.collect()
 
 def zip_code_maps(incident_df: pd.DataFrame):
     """
@@ -444,8 +431,6 @@ def zip_code_maps(incident_df: pd.DataFrame):
     st.subheader("Positive Sentiment Map")
     st.plotly_chart(sentiment_map_fig)
     
-    gc.collect()
-
 def zip_code_heatmap(incident_df: pd.DataFrame):
     """
     Generates a heatmap of NYC zip codes with sentiment data.
@@ -488,8 +473,6 @@ def zip_code_heatmap(incident_df: pd.DataFrame):
     heatmap_fig.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
     st.plotly_chart(heatmap_fig)
     
-    gc.collect()
-
 def borough_income_chart(df: pd.DataFrame):
     """
     Analyzes and visualizes average median income by borough.
@@ -515,7 +498,6 @@ def borough_income_chart(df: pd.DataFrame):
         labels={'Median Income': 'Average Median Income ($)', 'Borough': 'Borough'}
     )
     st.plotly_chart(fig)
-    gc.collect()
 
 
 def project_report_page():
@@ -558,7 +540,6 @@ def project_report_page():
     ### 6. Conclusion
     This project successfully combines data science, machine learning, and geospatial analysis to create a powerful tool for understanding public sentiment. The interactive dashboard provides a clear, intuitive way to explore complex data, making it valuable for researchers, policymakers, and anyone interested in the pulse of public opinion in New York City.
     """)
-    gc.collect()
 
 def combined_prediction_page():
     """
@@ -630,7 +611,7 @@ def main():
         st.session_state.df = load_data(topic_choice)
         st.session_state.incident_df = load_incident_df(topic_choice)
         st.session_state.page_selector = "📊 Sentiment Analysis Dashboard"
-        st.experimental_rerun()
+        st.rerun()
     
     # Wait for data to be loaded
     if 'df' not in st.session_state or 'incident_df' not in st.session_state:
