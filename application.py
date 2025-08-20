@@ -554,10 +554,16 @@ def dashboard_page():
     topic_choice = st.sidebar.selectbox("Select Topic:", list(DATASET_FILES.keys()), index=0)
 
     # State management for data loading
-    if 'df' not in st.session_state or st.session_state.df_key != topic_choice:
+    # This block ensures all dataframes are loaded into session state at the beginning
+    # of the dashboard page, preventing the AttributeError.
+    if 'df' not in st.session_state or st.session_state.get('df_key') != topic_choice:
         st.session_state.df = load_data(topic_choice)
         st.session_state.df_key = topic_choice
+    
+    if 'incident_df' not in st.session_state or st.session_state.get('df_key') != topic_choice:
         st.session_state.incident_df = load_incident_data(topic_choice)
+    
+    if 'nyc_gdf' not in st.session_state:
         st.session_state.nyc_gdf = load_shapefile()
 
     st.sidebar.markdown("---")
