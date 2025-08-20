@@ -270,7 +270,7 @@ def load_shapefile():
         st.stop()
     
 # =========================
-# NEW VISUALIZATION FUNCTIONS
+# VISUALIZATION FUNCTIONS
 # =========================
 plt.style.use('seaborn-v0_8')
 sns.set_context('talk', font_scale=1.2)
@@ -572,6 +572,8 @@ def dashboard_page():
         ["📈 Sentiment Trends Over Time", 
          "🗺 ZIP Code Sentiment Maps",
          "🗺 ZIP Code Sentiment Heatmap",
+         "📍 Geographical Distribution of Tweet Sentiments",
+         "📊 Distribution of Median Income",
          "💰 Average Median Income by Borough",
          "🎉 Top 5 Emotions Pie Chart",
          "📊 Emotion vs Sentiment Bar Chart",
@@ -594,6 +596,10 @@ def dashboard_page():
         emotion_sentiment_bar_chart(df)
     elif visualization_choice == "📦 Emotion Confidence Box Plot":
         emotion_confidence_boxplot(df)
+    elif visualization_choice == "📍 Geographical Distribution of Tweet Sentiments":
+        geo_sentiment_scatterplot(df)
+    elif visualization_choice == "📊 Distribution of Median Income":
+        median_income_histogram(df)
     elif visualization_choice == "💰 Average Median Income by Borough":
         borough_income_chart(df)
     elif visualization_choice == "🔥 Emotion vs Sentiment Heatmap":
