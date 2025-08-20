@@ -43,7 +43,8 @@ MAX_POINTS_SCATTER = 20000
 # Use a persistent directory for files to avoid re-downloading on every run in some environments
 DATA_DIR = Path(tempfile.gettempdir()) / "app_data"
 SHAPE_DIR = DATA_DIR / "shapefiles"
-SHAPEFILE_PATH = SHAPE_DIR / "tl_2020_us_zcta510.shp"
+US_SHAPEFILE_PATH = SHAPE_DIR / "tl_2020_us_zcta510.shp"
+NYC_SHAPEFILE_PATH = SHAPE_DIR / "nyc_zcta510.shp"
 
 # Create directories if they don't exist
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -218,26 +219,45 @@ def load_incident_data(incident_key):
     incident_df['Incident Zip'] = incident_df['Incident Zip'].astype(str).str.zfill(5)
     return incident_df
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def load_shapefile():
+    if NYC_SHAPEFILE_PATH.exists() and NYC_SHAPEFILE_PATH.stat().st_size > 0:
+        logger.info("Loading pre-filtered NYC shapefile.")
+        nyc_gdf = gpd.read_file(NYC_SHAPEFILE_PATH)
+        return nyc_gdf
+    
+    # If the pre-filtered file doesn't exist, we must do the expensive one-time process
+    st.info("First-time setup: Optimizing geographic data for NYC. This may take a moment.")
+    
+    # Download all necessary files for the US shapefile
     for sf in SHAPE_FILES:
         path = SHAPE_DIR / sf["name"]
         download_from_drive(sf["id"], path)
+    
     try:
-        zcta_gdf = gpd.read_file(SHAPEFILE_PATH)
+        # Load the massive US shapefile
+        zcta_gdf = gpd.read_file(US_SHAPEFILE_PATH)
+        
+        # Aggressively filter to only NYC ZIP codes to save memory
         zcta_gdf['ZCTA5CE10'] = zcta_gdf['ZCTA5CE10'].astype(str).str.zfill(5)
         nyc_zip_prefixes = ('100', '101', '102', '103', '104', '111', '112', '113', '114', '116')
-        # Optimized: filter the GeoDataFrame immediately to save memory
         nyc_gdf = zcta_gdf[zcta_gdf['ZCTA5CE10'].str.startswith(nyc_zip_prefixes)].copy()
+        
+        # Save the much smaller, pre-filtered file
+        nyc_gdf.to_file(NYC_SHAPEFILE_PATH, driver='ESRI Shapefile')
+        
         # Explicitly delete the full GeoDataFrame to free up memory
         del zcta_gdf
         gc.collect()
+        
+        st.success("Geographic data optimized successfully! Loading the NYC-specific file.")
+        
         return nyc_gdf
     except Exception as e:
-        logger.error(f"Failed to load geographic data: {e}")
-        st.error("Failed to load geographic data. Please check shapefile availability.")
+        logger.error(f"Failed to load and filter geographic data: {e}")
+        st.error("Failed to load geographic data. Please check file IDs and try again.")
         st.stop()
-    
+        
 # =========================
 # NEW VISUALIZATION FUNCTIONS
 # =========================
@@ -424,11 +444,12 @@ def emotion_map(df):
         fig.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
         st.plotly_chart(fig, use_container_width=True)
 
-def zip_code_maps(incident_df, nyc_gdf):
+def zip_code_maps(incident_df):
     st.subheader("ZIP Code Sentiment Maps")
-    if nyc_gdf is None:
-        st.warning("Please load the geographic data from the sidebar to view this map.")
-        return
+    
+    # Load the optimized shapefile
+    nyc_gdf = load_shapefile()
+    
     incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
     incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
     for col in ['negative', 'positive', 'neutral']:
@@ -464,11 +485,12 @@ def zip_code_maps(incident_df, nyc_gdf):
     st.markdown("- Positive Incidents (%): This map shows the percentage of positive sentiment incidents relative to total incidents in each NYC ZIP code. Darker shades indicate higher percentages.")
     st.markdown("- Neutral Incidents (%): This map shows the percentage of neutral sentiment incidents relative to total incidents in each NYC ZIP code. Darker shades indicate higher percentages.")
 
-def zip_code_heatmap(incident_df, nyc_gdf):
+def zip_code_heatmap(incident_df):
     st.subheader("ZIP Code Sentiment Heatmap")
-    if nyc_gdf is None:
-        st.warning("Please load the geographic data from the sidebar to view this map.")
-        return
+    
+    # Load the optimized shapefile
+    nyc_gdf = load_shapefile()
+    
     incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
     incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
     incident_sums['combined_sentiment'] = (incident_sums['positive'] - incident_sums['negative']) / incident_sums['total'].replace(0, 1)
@@ -710,7 +732,6 @@ def main():
     # This is the fix: use setdefault to guarantee keys exist at the start of every run.
     st.session_state.setdefault('df', None)
     st.session_state.setdefault('incident_df', None)
-    st.session_state.setdefault('nyc_gdf', None)
     st.session_state.setdefault('current_dataset_choice', None)
 
     st.sidebar.title("Data and View Options")
@@ -746,13 +767,6 @@ def main():
         else:
             st.sidebar.warning("Please select a dataset first.")
 
-    # New button for explicitly loading the large geographic data
-    st.sidebar.markdown("---")
-    st.sidebar.info("Geographic maps require an additional data file.")
-    if st.sidebar.button("Load Geographic Data"):
-        with st.spinner("Loading NYC shapefile... this may take a moment."):
-            st.session_state['nyc_gdf'] = load_shapefile()
-        st.sidebar.success("Geographic data loaded successfully!")
 
     if st.session_state.df is None:
         st.info("Please select a dataset from the sidebar and click 'Load Dataset' to begin.")
@@ -823,9 +837,11 @@ def main():
             elif visualization_choice == "🔥 Emotion vs Sentiment Heatmap":
                 emotion_sentiment_heatmap(st.session_state.df)
             elif visualization_choice == "🗺 ZIP Code Sentiment Maps":
-                zip_code_maps(st.session_state.incident_df, st.session_state.nyc_gdf)
+                # The function now handles the data loading internally
+                zip_code_maps(st.session_state.incident_df)
             elif visualization_choice == "🗺 ZIP Code Sentiment Heatmap":
-                zip_code_heatmap(st.session_state.incident_df, st.session_state.nyc_gdf)
+                # The function now handles the data loading internally
+                zip_code_heatmap(st.session_state.incident_df)
             elif visualization_choice == "💰 Average Median Income by Borough":
                 borough_income_chart(st.session_state.df)
 
