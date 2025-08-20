@@ -23,8 +23,6 @@ import warnings
 from typing import Optional, Dict, List, Tuple
 import threading
 import sys
-import folium
-from streamlit_folium import folium_static
 
 # Suppress all warnings for cleaner output
 warnings.filterwarnings('ignore')
@@ -56,6 +54,12 @@ DATASET_FILES = {
     "Politics": {"id": "18Q9ORlDfoIQW_-RpwJy2qGrFWEA8dFQU", "name": "sample_twitter_data_politics_classified.csv"}
 }
 
+INCIDENT_FILES = {
+    "COVID-19": {"id": "1IbIfdrAU3ZYue5joLojPisRX3JJjwdvM", "name": "Incident Zip_covid_classified.csv"},
+    "Economics": {"id": "1SNpGyEHgrOe6ihx26vo38hf_zcxEnp64", "name": "Incident Zip_economics_classified.csv"},
+    "Politics": {"id": "1uNxIYzSY7cbgbuTc8zo0QYc5Dn5Ny2W_", "name": "Incident Zip_politics_classified.csv"}
+}
+
 MODEL_FILES = {
     "sentiment_model": {"id": "1lzZf79LGcB1J5SQsMh_mi1Jv_8V2q6K9", "name": "sentiment_model_large.pkl"},
     "sentiment_vectorizer": {"id": "12wRG57vERpdKgCaTiNyLiWC71KLWABK8", "name": "vectorizer_large.pkl"},
@@ -75,23 +79,18 @@ SHAPE_FILES = [
 
 # -------------------- HELPER FUNCTIONS --------------------
 
-def download_from_drive(file_id, output_path: Path, progress_bar=None, message="Downloading..."):
-    """Downloads a file from Google Drive if it doesn't exist, with an optional progress bar."""
+def download_from_drive(file_id, output_path: Path):
+    """Downloads a file from Google Drive if it doesn't exist."""
     if not output_path.exists() or output_path.stat().st_size == 0:
-        st.info(f"{message}")
-        with st.spinner(f"Downloading {output_path.name}... This might take a while."):
-            try:
-                # Use gdown's built-in progress bar
-                gdown.download(id=file_id, output=str(output_path), quiet=False)
-                if output_path.exists() and output_path.stat().st_size > 0:
-                    st.success(f"Successfully downloaded {output_path.name}")
-                    logger.info(f"Successfully downloaded {output_path.name}")
-                else:
-                    raise ValueError(f"Download failed: {output_path.name} is empty or missing.")
-            except Exception as e:
-                st.error(f"Failed to download {output_path.name}: {e}")
-                logger.error(f"Failed to download {output_path.name}: {e}")
-                raise RuntimeError(f"Download failed for {output_path.name}") from e
+        try:
+            gdown.download(id=file_id, output=str(output_path), quiet=False)
+            if output_path.exists() and output_path.stat().st_size > 0:
+                logger.info(f"Successfully downloaded {output_path.name}")
+            else:
+                raise ValueError(f"Download failed: {output_path.name} is empty or missing.")
+        except Exception as e:
+            logger.error(f"Failed to download {output_path.name}: {e}")
+            raise RuntimeError(f"Download failed for {output_path.name}") from e
 
 @st.cache_resource
 def load_all_models_cached():
@@ -198,485 +197,479 @@ class MemoryMonitor:
 
 @st.cache_data
 def load_data(dataset_key):
-    st.info("Loading tweet data...")
     file_info = DATASET_FILES[dataset_key]
     path = DATA_DIR / file_info["name"]
     download_from_drive(file_info["id"], path)
-    
-    with st.spinner("Reading data into DataFrame..."):
-        df = pd.read_csv(path, low_memory=False)
-
+    df = pd.read_csv(path, low_memory=False)
     df.columns = [col.strip().lower().replace(' ', '_') for col in df.columns]
-    
-    # Check for and drop rows with missing location data
-    if 'latitude' in df.columns and 'longitude' in df.columns:
-        df = df.dropna(subset=['latitude', 'longitude'])
-        df = df[(df['latitude'].between(-90, 90)) & (df['longitude'].between(-180, 180))]
-    
-    # Convert date column
+    df = df.dropna(subset=['latitude', 'longitude'])
+    df = df[(df['latitude'].between(-90, 90)) & (df['longitude'].between(-180, 180))]
     if 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    
-    st.success("Tweet data loaded successfully!")
     return df
 
 @st.cache_data
+def load_incident_data(incident_key):
+    file_info = INCIDENT_FILES[incident_key]
+    path = DATA_DIR / file_info["name"]
+    download_from_drive(file_info["id"], path)
+    incident_df = pd.read_csv(path, low_memory=False)
+    incident_df['Incident Zip'] = incident_df['Incident Zip'].astype(str).str.zfill(5)
+    return incident_df
+
+@st.cache_data
 def load_shapefile():
-    with st.spinner("Preparing geographic data for maps..."):
-        for i, sf in enumerate(SHAPE_FILES):
-            path = SHAPE_DIR / sf["name"]
-            download_from_drive(sf["id"], path, message=f"Downloading geographic file {i+1}/{len(SHAPE_FILES)}: {sf['name']}")
-    
+    for sf in SHAPE_FILES:
+        path = SHAPE_DIR / sf["name"]
+        download_from_drive(sf["id"], path)
     try:
-        st.info("Loading and processing shapefile...")
-        with st.spinner("This may take a moment due to file size..."):
-            zcta_gdf = gpd.read_file(SHAPEFILE_PATH)
-            
+        zcta_gdf = gpd.read_file(SHAPEFILE_PATH)
         zcta_gdf['ZCTA5CE10'] = zcta_gdf['ZCTA5CE10'].astype(str).str.zfill(5)
         nyc_zip_prefixes = ('100', '101', '102', '103', '104', '111', '112', '113', '114', '116')
-        
-        st.info("Filtering for NYC zip codes...")
+        # Optimized: filter the GeoDataFrame immediately to save memory
         nyc_gdf = zcta_gdf[zcta_gdf['ZCTA5CE10'].str.startswith(nyc_zip_prefixes)].copy()
-        
+        # Explicitly delete the full GeoDataFrame to free up memory
         del zcta_gdf
         gc.collect()
-        
-        st.success("Geographic data loaded successfully!")
         return nyc_gdf
     except Exception as e:
-        logger.error(f"Failed to load geographic data: {e}", exc_info=True)
-        st.error(f"An error occurred while loading geographic data: {e}")
-        st.warning("Please check the data files and try again.")
+        logger.error(f"Failed to load geographic data: {e}")
+        st.error("Failed to load geographic data. Please check shapefile availability.")
         st.stop()
-
+    
 # =========================
-# VISUALIZATION FUNCTIONS
+# NEW VISUALIZATION FUNCTIONS
 # =========================
 plt.style.use('seaborn-v0_8')
 sns.set_context('talk', font_scale=1.2)
 top_n = 5
 
 def top_emotions_pie_chart(df):
-    st.subheader("🎉 Top 5 Emotions in Tweets")
+    st.subheader("Top 5 Emotions in Tweets")
     if 'emotion' not in df.columns or df['emotion'].isnull().all():
         st.warning("Emotion data not available for this dataset.")
         return
-    try:
-        value_counts = df['emotion'].value_counts().head(top_n)
-        if value_counts.empty:
-            st.warning("No emotion data to display.")
-            return
-        labels = value_counts.index.tolist()
-        sizes = value_counts.values.tolist()
-        colors = sns.color_palette("tab10", len(labels))
-        explode = [0.1 if i == 0 else 0 for i in range(len(labels))]
-        fig, ax = plt.subplots(figsize=(10, 10))
-        ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%',
-               shadow=True, startangle=90, textprops={'fontsize': 14})
-        ax.set_title('Top 5 Emotions in Tweets', pad=20, fontsize=18)
-        ax.axis('equal')
-        st.pyplot(fig)
-        plt.close(fig)
-        st.markdown(f"Summary: The most frequent emotion is **{labels[0]}** with {sizes[0]} tweets "
-                    f"({sizes[0]/sum(sizes)*100:.1f}%). Top emotions together account for {sum(sizes)} tweets.")
-    except Exception as e:
-        st.error(f"An error occurred while generating the pie chart: {e}")
+    value_counts = df['emotion'].value_counts().head(top_n)
+    labels = value_counts.index.tolist()
+    sizes = value_counts.values.tolist()
+    colors = sns.color_palette("tab10", len(labels))
+    explode = [0.1 if i == 0 else 0 for i in range(len(labels))]
+    fig, ax = plt.subplots(figsize=(10, 10))
+    ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%',
+           shadow=True, startangle=90, textprops={'fontsize': 14})
+    ax.set_title('Top 5 Emotions in Tweets', pad=20, fontsize=18)
+    ax.axis('equal')
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown(f"Summary: The most frequent emotion is {labels[0]} with {sizes[0]} tweets "
+                f"({sizes[0]/sum(sizes)*100:.1f}%). Top emotions together account for {sum(sizes)} tweets.")
 
 def emotion_sentiment_bar_chart(df):
-    st.subheader("📊 Emotion Distribution by Sentiment Category")
-    if 'emotion' not in df.columns or 'category' not in df.columns:
-        st.warning("Required columns ('emotion', 'category') not available for this visualization.")
+    st.subheader("Emotion Distribution by Sentiment Category")
+    if 'emotion' not in df.columns or df['emotion'].isnull().all():
+        st.warning("Emotion data not available for this dataset.")
         return
-    try:
-        top_emotions = df['emotion'].value_counts().head(top_n).index
-        if top_emotions.empty:
-            st.warning("No emotion data to display.")
-            return
-        emotion_sentiment = df[df['emotion'].isin(top_emotions)] \
-            .groupby(['emotion', 'category']).size().unstack(fill_value=0) \
-            .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
-        fig, ax = plt.subplots(figsize=(12, 7))
-        emotion_sentiment.plot(kind='bar', stacked=True, color=sns.color_palette("tab10", 3), ax=ax)
-        ax.set_title('Emotion Distribution by Sentiment Category', fontsize=18)
-        ax.set_xlabel('Emotion', fontsize=14)
-        ax.set_ylabel('Number of Tweets', fontsize=14)
-        ax.legend(title='Sentiment', fontsize=12)
-        plt.xticks(rotation=45, ha='right')
-        st.pyplot(fig)
-        plt.close(fig)
-        st.markdown("Summary: This chart shows how each of the top emotions is distributed across "
-                    "positive, neutral, and negative sentiments.")
-    except Exception as e:
-        st.error(f"An error occurred while generating the bar chart: {e}")
+    top_emotions = df['emotion'].value_counts().head(top_n).index
+    emotion_sentiment = df[df['emotion'].isin(top_emotions)] \
+        .groupby(['emotion', 'category']).size().unstack(fill_value=0) \
+        .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
+    fig, ax = plt.subplots(figsize=(12, 7))
+    emotion_sentiment.plot(kind='bar', stacked=True, color=sns.color_palette("tab10", 3), ax=ax)
+    ax.set_title('Emotion Distribution by Sentiment Category', fontsize=18)
+    ax.set_xlabel('Emotion', fontsize=14)
+    ax.set_ylabel('Number of Tweets', fontsize=14)
+    ax.legend(title='Sentiment', fontsize=12)
+    plt.xticks(rotation=45, ha='right')
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("Summary: This chart shows how each of the top emotions is distributed across "
+                "positive, neutral, and negative sentiments.")
 
 def emotion_confidence_boxplot(df):
-    st.subheader("📦 Emotion Confidence Distribution by Top 5 Emotions")
-    if 'emotion' not in df.columns or 'emotion_confidence' not in df.columns:
-        st.warning("Required columns ('emotion', 'emotion_confidence') not available for this visualization.")
+    st.subheader("Emotion Confidence Distribution by Top 5 Emotions")
+    if 'emotion' not in df.columns or 'emotion_confidence' not in df.columns or df['emotion'].isnull().all():
+        st.warning("Emotion or Emotion Confidence data not available for this dataset.")
         return
-    try:
-        top_emotions = df['emotion'].value_counts().head(top_n).index
-        if top_emotions.empty:
-            st.warning("No emotion data to display.")
-            return
-        fig, ax = plt.subplots(figsize=(12, 7))
-        sns.boxplot(x='emotion', y='emotion_confidence',
-                    data=df[df['emotion'].isin(top_emotions)], palette='tab10', ax=ax)
-        ax.set_title('Emotion Confidence Distribution by Top 5 Emotions', fontsize=18)
-        ax.set_xlabel('Emotion', fontsize=14)
-        ax.set_ylabel('Emotion Confidence', fontsize=14)
-        plt.xticks(rotation=45, ha='right')
-        st.pyplot(fig)
-        plt.close(fig)
-        st.markdown("Summary: Higher confidence scores indicate stronger certainty in emotion classification. "
-                    "This plot compares confidence levels for the top emotions.")
-    except Exception as e:
-        st.error(f"An error occurred while generating the box plot: {e}")
+    top_emotions = df['emotion'].value_counts().head(top_n).index
+    fig, ax = plt.subplots(figsize=(12, 7))
+    sns.boxplot(x='emotion', y='emotion_confidence',
+                data=df[df['emotion'].isin(top_emotions)], palette='tab10', ax=ax)
+    ax.set_title('Emotion Confidence Distribution by Top 5 Emotions', fontsize=18)
+    ax.set_xlabel('Emotion', fontsize=14)
+    ax.set_ylabel('Emotion Confidence', fontsize=14)
+    plt.xticks(rotation=45, ha='right')
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("Summary: Higher confidence scores indicate stronger certainty in emotion classification. "
+                "This plot compares confidence levels for the top emotions.")
 
 def geo_sentiment_scatterplot(df):
-    st.subheader("📍 Geographical Distribution of Tweet Sentiments")
-    if 'latitude' not in df.columns or 'longitude' not in df.columns or 'category' not in df.columns:
-        st.warning("Required columns ('latitude', 'longitude', 'category') not available for this visualization.")
+    st.subheader("Geographical Distribution of Tweet Sentiments")
+    if 'latitude' not in df.columns or 'longitude' not in df.columns:
+        st.warning("Latitude and Longitude data not available for this visualization.")
         return
-    try:
-        if df[['latitude', 'longitude']].empty:
-            st.warning("No location data to display on the scatter plot.")
-            return
-        fig, ax = plt.subplots(figsize=(12, 8))
-        sns.scatterplot(
-            x='longitude',
-            y='latitude',
-            hue='category',
-            palette={1: '#ff9999', 0: '#66b3ff', -1: '#99ff99'},
-            data=df,
-            alpha=0.6,
-            ax=ax
-        )
-        ax.set_title('Geographical Distribution of Tweet Sentiments', fontsize=18)
-        st.pyplot(fig)
-        plt.close(fig)
-        st.markdown("Summary: Each point represents a tweet's location. Colors indicate sentiment category.")
-    except Exception as e:
-        st.error(f"An error occurred while generating the scatter plot: {e}")
+    fig, ax = plt.subplots(figsize=(12, 8))
+    sns.scatterplot(
+        x='longitude', y='latitude',
+        hue='category', palette={1: '#ff9999', 0: '#66b3ff', -1: '#99ff99'},
+        data=df, alpha=0.6, ax=ax
+    )
+    ax.set_title('Geographical Distribution of Tweet Sentiments', fontsize=18)
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("Summary: Each point represents a tweet's location. Colors indicate sentiment category.")
 
 def median_income_histogram(df):
-    st.subheader("📊 Distribution of Median Income in Tweet Locations")
+    st.subheader("Distribution of Median Income in Tweet Locations")
     if 'median_income' not in df.columns:
         st.warning("Median Income data not available for this visualization.")
         return
-    try:
-        if df['median_income'].empty:
-            st.warning("No median income data to display.")
-            return
-        fig, ax = plt.subplots(figsize=(12, 7))
-        sns.histplot(df['median_income'].dropna(), bins=50, kde=True, color='purple', ax=ax)
-        ax.set_title('Distribution of Median Income in Tweet Locations', fontsize=18)
-        st.pyplot(fig)
-        plt.close(fig)
-        st.markdown("Summary: This distribution shows the range of median incomes for locations mentioned in tweets.")
-    except Exception as e:
-        st.error(f"An error occurred while generating the histogram: {e}")
+    fig, ax = plt.subplots(figsize=(12, 7))
+    sns.histplot(df['median_income'].dropna(), bins=50, kde=True, color='purple', ax=ax)
+    ax.set_title('Distribution of Median Income in Tweet Locations', fontsize=18)
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("Summary: This distribution shows the range of median incomes for locations mentioned in tweets.")
 
 def sentiment_trends_line_chart(df):
-    st.subheader("📈 Sentiment Trends Over Time")
-    if 'date' not in df.columns or 'category' not in df.columns:
-        st.warning("Required columns ('date', 'category') not available for this visualization.")
+    st.subheader("Sentiment Trends Over Time")
+    if 'date' not in df.columns:
+        st.warning("Date data not available for this visualization.")
         return
-    try:
-        sentiment_over_time = df.groupby([df['date'].dt.date, 'category']) \
-            .size().unstack(fill_value=0) \
-            .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
-        
-        if sentiment_over_time.empty:
-            st.warning("Not enough data to create a sentiment trend chart.")
-            return
-
-        fig, ax = plt.subplots(figsize=(14, 7))
-        for col in sentiment_over_time.columns:
-            ax.plot(sentiment_over_time.index, sentiment_over_time[col], label=col, linewidth=2)
-        ax.legend(title='Sentiment', fontsize=12)
-        ax.set_title('Sentiment Trends Over Time', fontsize=18)
-        st.pyplot(fig)
-        plt.close(fig)
-        st.markdown("Summary: This line chart tracks how the frequency of each sentiment "
-                    "has changed over time in the dataset.")
-    except Exception as e:
-        st.error(f"An error occurred while generating the line chart: {e}")
+    sentiment_over_time = df.groupby([df['date'].dt.date, 'category']) \
+                                 .size().unstack(fill_value=0) \
+                                 .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
+    fig, ax = plt.subplots(figsize=(14, 7))
+    for col in sentiment_over_time.columns:
+        ax.plot(sentiment_over_time.index, sentiment_over_time[col], label=col, linewidth=2)
+    ax.legend(title='Sentiment', fontsize=12)
+    ax.set_title('Sentiment Trends Over Time', fontsize=18)
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("Summary: This line chart tracks how the frequency of each sentiment "
+                "has changed over time in the dataset.")
 
 def emotion_sentiment_heatmap(df):
-    st.subheader("🔥 Emotion vs Sentiment Correlation Heatmap")
-    if 'emotion' not in df.columns or 'category' not in df.columns:
-        st.warning("Required columns ('emotion', 'category') not available for this visualization.")
+    st.subheader("Emotion vs Sentiment Correlation Heatmap")
+    if 'emotion' not in df.columns or df['emotion'].isnull().all():
+        st.warning("Emotion data not available for this visualization.")
         return
-    try:
-        top_emotions = df['emotion'].value_counts().head(top_n).index
-        if top_emotions.empty:
-            st.warning("No emotion data to display for the heatmap.")
-            return
-        emotion_sentiment_counts = df[df['emotion'].isin(top_emotions)] \
-            .groupby(['emotion', 'category']).size().unstack(fill_value=0) \
-            .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
-        fig, ax = plt.subplots(figsize=(10, 8))
-        sns.heatmap(emotion_sentiment_counts, annot=True, fmt='d', cmap='YlGnBu', ax=ax)
-        ax.set_title('Emotion vs Sentiment Correlation', fontsize=18)
-        st.pyplot(fig)
-        plt.close(fig)
-        st.markdown("Summary: This heatmap shows the relationship between different emotions and sentiment categories.")
-    except Exception as e:
-        st.error(f"An error occurred while generating the heatmap: {e}")
+    top_emotions = df['emotion'].value_counts().head(top_n).index
+    emotion_sentiment_counts = df[df['emotion'].isin(top_emotions)] \
+        .groupby(['emotion', 'category']).size().unstack(fill_value=0) \
+        .rename(columns={-1: 'Negative', 0: 'Neutral', 1: 'Positive'})
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sns.heatmap(emotion_sentiment_counts, annot=True, fmt='d', cmap='YlGnBu', ax=ax)
+    ax.set_title('Emotion vs Sentiment Correlation', fontsize=18)
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("Summary: This heatmap shows the relationship between emotions and sentiment categories, "
+                "with cell values representing tweet counts.")
 
-def zip_code_maps(df, nyc_gdf):
-    st.subheader("🗺 NYC Zip Code Incident Maps")
-    if df.empty or 'zip' not in df.columns or 'latitude' not in df.columns or 'longitude' not in df.columns:
-        st.warning("Required columns ('zip', 'latitude', 'longitude') not available for this visualization.")
-        return
-    if nyc_gdf.empty or 'ZCTA5CE10' not in nyc_gdf.columns:
-        st.warning("Geographic data is not available or missing 'ZCTA5CE10' column.")
-        return
-    
-    try:
-        st.info("Creating ZIP code choropleth map...")
-        # Clean and count incidents by ZIP code from the main dataframe
-        incident_counts = df.dropna(subset=['zip']).groupby('zip').size().reset_index(name='count')
-        
-        merged_gdf = nyc_gdf.merge(incident_counts, left_on='ZCTA5CE10', right_on='zip', how='left')
-        merged_gdf['count'] = merged_gdf['count'].fillna(0)
-        
-        # Create the map
-        m = folium.Map(location=[40.7128, -74.0060], zoom_start=11, tiles="cartodbpositron")
+def sentiment_pie_chart(df):
+    st.subheader("Sentiment Distribution")
+    value_counts = df['category'].value_counts()
+    labels = ['Positive', 'Neutral', 'Negative']
+    sizes = [
+        value_counts.get(1, 0),
+        value_counts.get(0, 0),
+        value_counts.get(-1, 0)
+    ]
+    fig, ax = plt.subplots(figsize=(6, 6))
+    colors = ['#4CAF50', '#2196F3', '#F44336']
+    explode = (0.1, 0, 0)
+    ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', shadow=True, startangle=90)
+    ax.axis('equal')
+    st.pyplot(fig)
+    plt.close(fig)
 
-        folium.Choropleth(
-            geo_data=merged_gdf,
-            data=merged_gdf,
-            columns=['ZCTA5CE10', 'count'],
-            key_on='feature.properties.ZCTA5CE10',
-            fill_color='YlOrRd',
-            fill_opacity=0.7,
-            line_opacity=0.2,
-            legend_name='Number of Incidents by ZIP Code',
-            highlight=True
-        ).add_to(m)
-        
-        style_function = lambda x: {'fillColor': '#ffffff', 'color':'#000000', 'fillOpacity': 0.1, 'weight': 0.1}
-        highlight_function = lambda x: {'fillColor': '#000000', 'color':'#000000', 'fillOpacity': 0.50, 'weight': 0.1}
-        
-        tooltip_style = """
-            background-color: white;
-            border: 2px solid grey;
-            border-radius: 3px;
-            box-shadow: 3px;
-        """
-        
-        # Add tooltips to the map
-        folium.GeoJson(
-            merged_gdf,
-            style_function=style_function,
-            highlight_function=highlight_function,
-            tooltip=folium.GeoJsonTooltip(
-                fields=['ZCTA5CE10', 'count'],
-                aliases=['ZIP Code', 'Incidents'],
-                localize=True,
-                sticky=False
-            )
-        ).add_to(m)
-        
-        folium_static(m)
+def emotion_pie_chart(df):
+    st.subheader("Emotion Distribution")
+    value_counts = df['emotion'].value_counts()
+    labels = value_counts.index.tolist()
+    sizes = value_counts.values.tolist()
+    fig, ax = plt.subplots(figsize=(6, 6))
+    colors = sns.color_palette("husl", len(labels))
+    explode = [0.1] + [0] * (len(labels) - 1)
+    ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', shadow=True, startangle=90)
+    ax.axis('equal')
+    st.pyplot(fig)
+    plt.close(fig)
 
-        st.markdown("Summary: This map shows the geographical distribution of incidents reported in NYC zip codes, "
-                    "with darker shades indicating a higher number of incidents.")
-    except Exception as e:
-        st.error(f"An error occurred while generating the ZIP code map: {e}")
+def sentiment_map(df):
+    nyc_bbox = {'min_lon': -74.27, 'max_lon': -73.68, 'min_lat': 40.48, 'max_lat': 40.95}
+    nyc_df = df[(df['longitude'].between(nyc_bbox['min_lon'], nyc_bbox['max_lon'])) &
+                (df['latitude'].between(nyc_bbox['min_lat'], nyc_bbox['max_lat']))]
+    sentiment_map = {-1: "#e74c3c", 0: "#f39c12", 1: "#2ecc71"}
+    for cat, color in sentiment_map.items():
+        sub_df = nyc_df[nyc_df['category'] == cat].sample(min(2000, len(nyc_df[nyc_df['category'] == cat])), random_state=42)
+        fig = px.scatter_mapbox(sub_df, lat="latitude", lon="longitude",
+                                color_discrete_sequence=[color], zoom=10, height=400,
+                                hover_data=["emotion"])
+        fig.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
+        st.plotly_chart(fig, use_container_width=True)
 
+def emotion_map(df):
+    nyc_bbox = {'min_lon': -74.27, 'max_lon': -73.68, 'min_lat': 40.48, 'max_lat': 40.95}
+    nyc_df = df[(df['longitude'].between(nyc_bbox['min_lon'], nyc_bbox['max_lon'])) &
+                (df['latitude'].between(nyc_bbox['min_lat'], nyc_bbox['max_lat']))]
+    emotion_colors = {"joy": "#FFD700", "anger": "#FF4500", "sadness": "#1E90FF", "fear": "#9400D3"}
+    for emo, color in emotion_colors.items():
+        sub_df = nyc_df[nyc_df['emotion'] == emo].sample(min(2000, len(nyc_df[nyc_df['emotion'] == emo])), random_state=42)
+        fig = px.scatter_mapbox(sub_df, lat="latitude", lon="longitude",
+                                color_discrete_sequence=[color], zoom=10, height=400,
+                                hover_data=["category"])
+        fig.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
+        st.plotly_chart(fig, use_container_width=True)
 
-def zip_code_heatmap(df):
-    st.subheader("🗺 NYC Zip Code Incident Heatmap")
-    if df.empty or 'latitude' not in df.columns or 'longitude' not in df.columns:
-        st.warning("Required columns ('latitude', 'longitude') not available for this visualization.")
-        return
-    
-    from folium.plugins import HeatMap
-    
-    try:
-        st.info("Generating heatmap...")
-        # Reduce data points if necessary for performance
-        if len(df) > MAX_POINTS_MAP:
-            df_small = df.sample(MAX_POINTS_MAP, random_state=42)
-            st.warning(f"Using a sample of {MAX_POINTS_MAP} points for the heatmap for better performance.")
-        else:
-            df_small = df
-            
-        m = folium.Map([40.7128, -74.0060], zoom_start=11)
-        
-        # Check if there's any data to plot
-        if not df_small[['latitude', 'longitude']].empty:
-            heatmap_data = df_small[['latitude', 'longitude']].values.tolist()
-            HeatMap(heatmap_data, radius=15).add_to(m)
-        else:
-            st.warning("No location data to display on the heatmap.")
-            
-        folium_static(m)
-        st.markdown("Summary: This heatmap visualizes the density of incidents based on their geographical coordinates.")
-    except Exception as e:
-        st.error(f"An error occurred while generating the ZIP code heatmap: {e}")
+def zip_code_maps(incident_df, nyc_gdf):
+    st.subheader("ZIP Code Sentiment Maps")
+    incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
+    incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
+    for col in ['negative', 'positive', 'neutral']:
+        incident_sums[col + '_pct'] = (incident_sums[col] / incident_sums['total']).fillna(0) * 100
+    merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
+    merged_gdf[['negative', 'positive', 'neutral',
+                'negative_pct', 'positive_pct', 'neutral_pct']] = merged_gdf[
+                    ['negative', 'positive', 'neutral',
+                     'negative_pct', 'positive_pct', 'neutral_pct']].fillna(0)
+    fig, axes = plt.subplots(2, 3, figsize=(20, 14))
+    categories_counts = ['negative', 'positive', 'neutral']
+    cmaps_counts = ['Reds', 'Greens', 'Blues']
+    for ax, cat, cmap in zip(axes[0], categories_counts, cmaps_counts):
+        merged_gdf.plot(column=cat, cmap=cmap, linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
+                         legend_kwds={'label': "Count", 'orientation': "vertical"})
+        ax.set_title(f"NYC {cat.capitalize()} Incidents (Count)", fontsize=14)
+        ax.axis('off')
+    categories_pct = ['negative_pct', 'positive_pct', 'neutral_pct']
+    cmaps_pct = ['Reds', 'Greens', 'Blues']
+    for ax, cat, cmap in zip(axes[1], categories_pct, cmaps_pct):
+        merged_gdf.plot(column=cat, cmap=cmap, linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
+                         legend_kwds={'label': "Percentage", 'orientation': "vertical"})
+        ax.set_title(f"NYC {cat.replace('_pct','').capitalize()} Incidents (%)", fontsize=14)
+        ax.axis('off')
+    plt.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("### Map Descriptions")
+    st.markdown("- Negative Incidents (Count): This map shows the raw count of negative sentiment incidents across NYC ZIP codes. Darker shades indicate higher counts.")
+    st.markdown("- Positive Incidents (Count): This map shows the raw count of positive sentiment incidents across NYC ZIP codes. Darker shades indicate higher counts.")
+    st.markdown("- Neutral Incidents (Count): This map shows the raw count of neutral sentiment incidents across NYC ZIP codes. Darker shades indicate higher counts.")
+    st.markdown("- Negative Incidents (%): This map shows the percentage of negative sentiment incidents relative to total incidents in each NYC ZIP code. Darker shades indicate higher percentages.")
+    st.markdown("- Positive Incidents (%): This map shows the percentage of positive sentiment incidents relative to total incidents in each NYC ZIP code. Darker shades indicate higher percentages.")
+    st.markdown("- Neutral Incidents (%): This map shows the percentage of neutral sentiment incidents relative to total incidents in each NYC ZIP code. Darker shades indicate higher percentages.")
+
+def zip_code_heatmap(incident_df, nyc_gdf):
+    st.subheader("ZIP Code Sentiment Heatmap")
+    incident_sums = incident_df.groupby('Incident Zip')[['negative', 'positive', 'neutral']].sum().reset_index()
+    incident_sums['total'] = incident_sums[['negative', 'positive', 'neutral']].sum(axis=1)
+    incident_sums['combined_sentiment'] = (incident_sums['positive'] - incident_sums['negative']) / incident_sums['total'].replace(0, 1)
+    merged_gdf = nyc_gdf.merge(incident_sums, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
+    merged_gdf['combined_sentiment'] = merged_gdf['combined_sentiment'].fillna(0)
+    fig, ax = plt.subplots(1, 1, figsize=(12, 10))
+    merged_gdf.plot(column='combined_sentiment', cmap='RdYlBu_r', linewidth=0.6, ax=ax, edgecolor='0.8', legend=True,
+                     legend_kwds={'label': "Sentiment Score", 'orientation': "vertical"})
+    ax.set_title("NYC Sentiment Heatmap 2020", fontsize=16)
+    ax.axis('off')
+    plt.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("### Heatmap Description")
+    st.markdown("- Sentiment Heatmap: This map shows a combined sentiment score across NYC ZIP codes, calculated as (Positive - Negative) / Total incidents. Red indicates more negative sentiment, blue indicates more positive sentiment, and yellow/green represents neutral areas.")
 
 def borough_income_chart(df):
-    st.subheader("💰 Average Median Income by Borough")
-    if 'borough' not in df.columns or 'median_income' not in df.columns:
-        st.warning("Required columns ('borough', 'median_income') not available for this visualization.")
+    st.subheader("Average Median Income by NYC Borough")
+    # Added a robust check for the 'median_income' column
+    if 'median_income' not in df.columns:
+        st.error("Error: The selected dataset does not contain 'median_income' data for this visualization.")
         return
-    
-    try:
-        borough_income = df.groupby('borough')['median_income'].mean().sort_values(ascending=False)
-        if borough_income.empty:
-            st.warning("No borough income data to display.")
-            return
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-        borough_income.plot(kind='bar', color=sns.color_palette("viridis", len(borough_income)), ax=ax)
-        
-        ax.set_title("Average Median Income by Borough", fontsize=18)
-        ax.set_xlabel("Borough", fontsize=14)
-        ax.set_ylabel("Average Median Income", fontsize=14)
-        plt.xticks(rotation=45, ha='right')
-        st.pyplot(fig)
-        plt.close(fig)
-
-        st.markdown("Summary: This chart compares the average median income across different boroughs based on tweet locations.")
-    except Exception as e:
-        st.error(f"An error occurred while generating the borough income chart: {e}")
-
-
-# Main app logic
-def project_report_page():
-    st.title("📄 Project Report: Twitter Sentiment Analysis")
-    st.markdown("""
-    ### Introduction
-    This project is a comprehensive Streamlit application designed to analyze and visualize sentiment and emotion from Twitter data. It leverages machine learning models to classify tweets into sentiment categories (positive, neutral, negative) and emotions (e.g., happiness, sadness, anger). The application provides an an interactive dashboard with various visualizations to explore the dataset's characteristics, including sentiment trends, emotion distributions, and geographical patterns.
-
-    ### Data Sources
-    The application uses a combination of data sources:
-    - **Twitter Data:** CSV files containing tweets related to specific topics (e.g., COVID-19, Economics, Politics) with pre-classified sentiment and emotion labels.
-    - **Geographic Data:** A US Census Bureau shapefile (`tl_2020_us_zcta510.shp`) is used to map sentiment and incident data to specific zip codes.
-    - **Machine Learning Models:** Pre-trained models and vectorizers are stored in pickled files (`.pkl`) for sentiment and emotion classification.
-
-    ### Key Features
-    - **Dynamic Dashboard:** Users can select different topics and visualizations to explore the data in real-time.
-    - **Interactive Visualizations:** The app includes charts and maps to represent data in an intuitive way. This includes pie charts for emotion distribution, bar charts for emotion-sentiment correlation, and geographical maps for sentiment and incident density.
-    - **Combined Prediction Tool:** A dedicated section allows users to input custom text and receive instant sentiment and emotion predictions from the loaded models.
-    - **Performance Optimization:** The application uses Streamlit's `@st.cache_data` and `@st.cache_resource` decorators to efficiently cache data and models, preventing redundant downloads and processing.
-
-    ### Data Processing & Cleaning
-    The application includes a `MemoryOptimizedTweetCleaner` class to preprocess raw tweet text. This class performs several cleaning steps:
-    - Removal of URLs, mentions, and hashtags.
-    - Translation of emoticons into descriptive text (e.g., ":)" becomes "smiling_face").
-    - Removal of punctuation, extra whitespace, and single characters.
-    This ensures that the text data is in a clean format suitable for model prediction.
-
-    ### Challenges & Solutions
-    - **Large File Handling:** Geographic data files are large and can cause memory issues. The solution was to use Streamlit's caching, and to immediately filter the large GeoDataFrame to only include relevant NYC zip codes, and then explicitly delete the original large dataframe to free up memory (`del zcta_gdf`).
-    - **Model Loading:** Loading multiple large machine learning models can be slow. `@st.cache_resource` is used to load all models once and keep them in memory for the duration of the app session.
-    - **User Experience:** Streamlit's native widgets and layouts were utilized to create a user-friendly interface. Progress bars and loading spinners were added to provide feedback during time-consuming operations like file downloads.
-
-    ### Conclusion
-    This project provides a robust and interactive tool for analyzing Twitter data. It demonstrates a practical application of machine learning, data visualization, and web development principles. The optimizations for data handling and caching ensure a smooth user experience, even with large datasets. The modular design makes it easy to extend with new topics, models, or visualizations in the future.
-    """)
-
-def dashboard_page():
-    st.title("📊 Sentiment Analysis Dashboard")
-    st.markdown("Explore Twitter sentiment and emotion data with interactive visualizations.")
-    st.sidebar.header("Dashboard Filters")
-    
-    topic_choice = st.sidebar.selectbox("Select Topic:", list(DATASET_FILES.keys()), index=0)
-
-    # State management for data loading
-    if 'df' not in st.session_state or st.session_state.get('df_key') != topic_choice:
-        st.session_state.df = load_data(topic_choice)
-        st.session_state.df_key = topic_choice
-    
-    if 'nyc_gdf' not in st.session_state:
-        st.session_state.nyc_gdf = load_shapefile()
-
-    st.sidebar.markdown("---")
-    visualization_choice = st.sidebar.selectbox(
-        "Select Visualization:",
-        ["📈 Sentiment Trends Over Time", 
-         "🗺 ZIP Code Sentiment Maps",
-         "🗺 ZIP Code Sentiment Heatmap",
-         "📍 Geographical Distribution of Tweet Sentiments",
-         "📊 Distribution of Median Income",
-         "💰 Average Median Income by Borough",
-         "🎉 Top 5 Emotions Pie Chart",
-         "📊 Emotion vs Sentiment Bar Chart",
-         "📦 Emotion Confidence Box Plot",
-         "🔥 Emotion vs Sentiment Heatmap"
-        ]
+    zip_column = 'Incident Zip' if 'Incident Zip' in df.columns else 'incident_zip' if 'incident_zip' in df.columns else 'zip_code'
+    borough_map = {
+        "Manhattan": ['100', '101', '102'],
+        "Bronx": ['104'],
+        "Brooklyn": ['112'],
+        "Queens": ['110', '111', '113', '114', '116'],
+        "Staten Island": ['103']
+    }
+    def get_borough(zipcode):
+        zipcode = str(zipcode)
+        for borough, prefixes in borough_map.items():
+            if any(zipcode.startswith(pref) for pref in prefixes):
+                return borough
+        return None
+    df['borough'] = df[zip_column].apply(get_borough)
+    borough_income = (
+        df.dropna(subset=['median_income', 'borough'])
+          .groupby('borough')['median_income']
+          .mean()
+          .sort_values(ascending=False)
     )
+    fig, ax = plt.subplots(figsize=(8, 5))
+    borough_income.plot(kind='bar', color='skyblue', edgecolor='black', ax=ax)
+    ax.set_title('Average Median Income by NYC Borough', fontsize=16)
+    ax.set_ylabel('Median Income (USD)', fontsize=12)
+    ax.tick_params(axis='x', rotation=45)
+    ax.grid(axis='y', linestyle='--', alpha=0.6)
+    for i, value in enumerate(borough_income):
+        ax.text(i, value + 500, f"${value:,.0f}", ha='center', va='bottom', fontsize=10)
+    st.pyplot(fig)
+    plt.close(fig)
 
-    df = st.session_state.df
-    nyc_gdf = st.session_state.nyc_gdf
-
-    st.subheader(f"Analyzing: {topic_choice} Tweets")
-
-    if visualization_choice == "📈 Sentiment Trends Over Time":
-        sentiment_trends_line_chart(df)
-    elif visualization_choice == "🎉 Top 5 Emotions Pie Chart":
-        top_emotions_pie_chart(df)
-    elif visualization_choice == "📊 Emotion vs Sentiment Bar Chart":
-        emotion_sentiment_bar_chart(df)
-    elif visualization_choice == "📦 Emotion Confidence Box Plot":
-        emotion_confidence_boxplot(df)
-    elif visualization_choice == "📍 Geographical Distribution of Tweet Sentiments":
-        geo_sentiment_scatterplot(df)
-    elif visualization_choice == "📊 Distribution of Median Income":
-        median_income_histogram(df)
-    elif visualization_choice == "💰 Average Median Income by Borough":
-        borough_income_chart(df)
-    elif visualization_choice == "🔥 Emotion vs Sentiment Heatmap":
-        emotion_sentiment_heatmap(df)
-    elif visualization_choice == "🗺 ZIP Code Sentiment Maps":
-        zip_code_maps(df, nyc_gdf)
-    elif visualization_choice == "🗺 ZIP Code Sentiment Heatmap":
-        zip_code_heatmap(df)
-
-
-def combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer):
-    st.title("🔍 Combined Prediction")
-    st.markdown("Enter a short text and see its sentiment and emotion predictions instantly.")
-    
-    if any(m is None for m in [sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer]):
-        st.error("Models failed to load. Please restart the app or check your internet connection.")
-        return
-
-    text_input = st.text_area("Enter your text here:", height=100)
-    
+# =========================
+# Combined Prediction Page
+# =========================
+def combined_prediction_page():
+    st.title("Tweet Sentiment and Emotion Predictor")
     cleaner = MemoryOptimizedTweetCleaner()
-    
+    tweet = st.text_area("Write a tweet:", key="tweet_input_combined")
     if st.button("Predict"):
-        if text_input:
-            with st.spinner("Classifying..."):
-                cleaned_text = cleaner.clean_text(text_input)
-                
-                if cleaned_text:
-                    # Sentiment prediction
-                    sentiment_features = sentiment_vectorizer.transform([cleaned_text])
-                    sentiment_prediction = sentiment_model.predict(sentiment_features)[0]
-                    sentiment_category = "Positive" if sentiment_prediction == 1 else "Neutral" if sentiment_prediction == 0 else "Negative"
-                    
-                    # Emotion prediction
-                    emotion_features = emotion_vectorizer.transform([cleaned_text])
-                    emotion_prediction = emotion_model.predict(emotion_features)[0]
-
-                    st.markdown("---")
-                    st.subheader("Prediction Results")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("Sentiment", sentiment_category, delta=None)
-                    with col2:
-                        st.metric("Emotion", emotion_prediction.capitalize(), delta=None)
-                else:
-                    st.warning("The text could not be cleaned and processed. Please try a different input.")
+        if tweet.strip():
+            cleaned_tweet = cleaner.clean_text(tweet)
+            if cleaned_tweet:
+                sentiment_vec = sentiment_vectorizer.transform([cleaned_tweet])
+                sentiment_prediction = sentiment_model.predict(sentiment_vec)[0]
+                sentiment_proba = sentiment_model.predict_proba(sentiment_vec)[0]
+                sentiment_conf = np.max(sentiment_proba)
+                sentiment_label_map = {-1: "Negative 😡", 0: "Neutral 😐", 1: "Positive 😊"}
+                emotion_vec = emotion_vectorizer.transform([cleaned_tweet])
+                emotion_prediction = emotion_model.predict(emotion_vec)[0]
+                emotion_proba = emotion_model.predict_proba(emotion_vec)[0]
+                emotion_conf = np.max(emotion_proba)
+                emotion_label_map = {
+                    "joy": "Joy 😊", "anger": "Anger 😠", "sadness": "Sadness 😢",
+                    "fear": "Fear 😨", "surprise": "Surprise 😲", "neutral": "Neutral 😐"
+                }
+                emotion_label = emotion_label_map.get(emotion_prediction, f"Unknown Emotion ({emotion_prediction})")
+                st.write("Cleaned Tweet:", cleaned_tweet)
+                st.write(f"Sentiment Prediction: {sentiment_label_map[sentiment_prediction]} (Confidence: {sentiment_conf:.2f})")
+                st.write(f"Emotion Prediction: {emotion_label} (Confidence: {emotion_conf:.2f})")
+            else:
+                st.write("Cleaned Tweet: No valid content after cleaning")
+                st.write("Prediction: Unable to predict (invalid or empty tweet after cleaning)")
         else:
-            st.warning("Please enter some text to get a prediction.")
+            st.write("Please enter a tweet to predict.")
+            
+# =========================
+# MAIN APP LOGIC
+# =========================
+
+def main():
+    st.title("🐦 Twitter Sentiment Analysis Dashboard")
+    st.markdown("---")
+
+    if 'df' not in st.session_state:
+        st.session_state['df'] = None
+    # FIX: Corrected the syntax error by removing the duplicate 'in'
+    if 'incident_df' not in st.session_state:
+        st.session_state['incident_df'] = None
+    if 'nyc_gdf' not in st.session_state:
+        st.session_state['nyc_gdf'] = None
+    if 'current_dataset_choice' not in st.session_state:
+        st.session_state['current_dataset_choice'] = None
+
+    st.sidebar.title("Data and View Options")
+    
+    dataset_choice = st.sidebar.selectbox(
+        "Select a dataset to load:", 
+        list(DATASET_FILES.keys()),
+        index=None,
+        placeholder="Choose a dataset"
+    )
+    
+    if st.sidebar.button("Load Dataset"):
+        if dataset_choice:
+            if dataset_choice != st.session_state.get('current_dataset_choice'):
+                
+                # Aggressively clear old dataframes to free up memory before loading new ones
+                if 'df' in st.session_state:
+                    del st.session_state['df']
+                if 'incident_df' in st.session_state:
+                    del st.session_state['incident_df']
+                if 'nyc_gdf' in st.session_state:
+                    del st.session_state['nyc_gdf']
+                
+                # Force garbage collection
+                gc.collect()
+
+                st.session_state['current_dataset_choice'] = dataset_choice
+                st.cache_data.clear()
+                gc.collect()
+
+            with st.spinner(f"Loading main dataset for '{dataset_choice}'..."):
+                st.session_state['df'] = load_data(dataset_choice)
+            with st.spinner(f"Loading incident data for '{dataset_choice}'..."):
+                st.session_state['incident_df'] = load_incident_data(dataset_choice)
+            st.success(f"Data for '{dataset_choice}' has been loaded!")
+        else:
+            st.sidebar.warning("Please select a dataset first.")
+
+    if st.session_state.df is None:
+        st.info("Please select a dataset from the sidebar and click 'Load Dataset' to begin.")
+    else:
+        st.sidebar.markdown("---")
+        # Updated radio button list to separate all advanced visualizations
+        visualization_choice = st.sidebar.radio(
+            "Choose a visualization:", 
+            [
+                "📈 Overall Sentiment Pie Chart", 
+                "😄 Overall Emotion Pie Chart", 
+                "🗺 Tweet Sentiment Map", 
+                "🗺 Tweet Emotion Map",
+                "--- Advanced Visualizations ---",
+                "📊 Top Emotions Pie Chart",
+                "📊 Emotion by Sentiment Bar Chart",
+                "📊 Emotion Confidence Box Plot",
+                "🗺 Geographical Sentiment Scatter Plot",
+                "📊 Median Income Histogram",
+                "📈 Sentiment Trends Line Chart",
+                "🔥 Emotion vs Sentiment Heatmap",
+                "--- Geo-Statistical Maps ---",
+                "🗺 ZIP Code Sentiment Maps",
+                "🗺 ZIP Code Sentiment Heatmap",
+                "💰 Average Median Income by Borough"
+            ]
+        )
+        st.header(f"Visualizing: {st.session_state['current_dataset_choice']}")
+
+        # Load geographic data only when needed for map visualizations
+        if visualization_choice in [
+            "🗺 ZIP Code Sentiment Maps", 
+            "🗺 ZIP Code Sentiment Heatmap", 
+            "💰 Average Median Income by Borough"
+        ]:
+            if st.session_state.nyc_gdf is None:
+                with st.spinner("Loading geographic data..."):
+                    st.session_state['nyc_gdf'] = load_shapefile()
+
+        # Updated if/elif block to call the new, separate visualization functions
+        if visualization_choice == "📈 Overall Sentiment Pie Chart":
+            sentiment_pie_chart(st.session_state.df)
+        elif visualization_choice == "😄 Overall Emotion Pie Chart":
+            emotion_pie_chart(st.session_state.df)
+        elif visualization_choice == "🗺 Tweet Sentiment Map":
+            sentiment_map(st.session_state.df)
+        elif visualization_choice == "🗺 Tweet Emotion Map":
+            emotion_map(st.session_state.df)
+        elif visualization_choice == "📊 Top Emotions Pie Chart":
+            top_emotions_pie_chart(st.session_state.df)
+        elif visualization_choice == "📊 Emotion by Sentiment Bar Chart":
+            emotion_sentiment_bar_chart(st.session_state.df)
+        elif visualization_choice == "📊 Emotion Confidence Box Plot":
+            emotion_confidence_boxplot(st.session_state.df)
+        elif visualization_choice == "🗺 Geographical Sentiment Scatter Plot":
+            geo_sentiment_scatterplot(st.session_state.df)
+        elif visualization_choice == "📊 Median Income Histogram":
+            median_income_histogram(st.session_state.df)
+        elif visualization_choice == "📈 Sentiment Trends Line Chart":
+            sentiment_trends_line_chart(st.session_state.df)
+        elif visualization_choice == "🔥 Emotion vs Sentiment Heatmap":
+            emotion_sentiment_heatmap(st.session_state.df)
+        elif visualization_choice == "🗺 ZIP Code Sentiment Maps":
+            zip_code_maps(st.session_state.incident_df, st.session_state.nyc_gdf)
+        elif visualization_choice == "🗺 ZIP Code Sentiment Heatmap":
+            zip_code_heatmap(st.session_state.incident_df, st.session_state.nyc_gdf)
+        elif visualization_choice == "💰 Average Median Income by Borough":
+            borough_income_chart(st.session_state.df)
 
 
 if __name__ == '__main__':
@@ -694,15 +687,13 @@ if __name__ == '__main__':
         st.stop()
         
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to:", ["📄 Project Report", "📊 Sentiment Analysis Dashboard", "🔍 Combined Prediction"], key='page_selector')
+    page = st.sidebar.radio("Go to:", ["📊 Sentiment Analysis Dashboard", "🔍 Combined Prediction"], key='page_selector')
 
     if st.session_state.get('last_page') != page:
         st.session_state.clear()
         st.session_state.last_page = page
         
-    if page == "📄 Project Report":
-        project_report_page()
-    elif page == "📊 Sentiment Analysis Dashboard":
-        dashboard_page()
+    if page == "📊 Sentiment Analysis Dashboard":
+        main()
     elif page == "🔍 Combined Prediction":
-        combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer)
+        combined_prediction_page()
