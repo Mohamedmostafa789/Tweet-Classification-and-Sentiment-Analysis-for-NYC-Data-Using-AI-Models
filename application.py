@@ -272,7 +272,7 @@ def top_emotions_pie_chart(df):
         explode = [0.1 if i == 0 else 0 for i in range(len(labels))]
         fig, ax = plt.subplots(figsize=(10, 10))
         ax.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%',
-            shadow=True, startangle=90, textprops={'fontsize': 14})
+               shadow=True, startangle=90, textprops={'fontsize': 14})
         ax.set_title('Top 5 Emotions in Tweets', pad=20, fontsize=18)
         ax.axis('equal')
         st.pyplot(fig)
@@ -660,20 +660,24 @@ def combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_mode
                     # Sentiment prediction
                     sentiment_features = sentiment_vectorizer.transform([cleaned_text])
                     sentiment_prediction = sentiment_model.predict(sentiment_features)[0]
-                    sentiment_category = "Positive" if sentiment_prediction == 1 else "Negative" if sentiment_prediction == -1 else "Neutral"
+                    sentiment_category = "Positive" if sentiment_prediction == 1 else "Neutral" if sentiment_prediction == 0 else "Negative"
                     
                     # Emotion prediction
                     emotion_features = emotion_vectorizer.transform([cleaned_text])
                     emotion_prediction = emotion_model.predict(emotion_features)[0]
 
                     st.markdown("---")
-                    st.subheader("Results:")
-                    st.metric(label="Predicted Sentiment", value=sentiment_category)
-                    st.metric(label="Predicted Emotion", value=emotion_prediction)
+                    st.subheader("Prediction Results")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Sentiment", sentiment_category, delta=None)
+                    with col2:
+                        st.metric("Emotion", emotion_prediction.capitalize(), delta=None)
                 else:
-                    st.warning("Please enter some text to analyze.")
+                    st.warning("The text could not be cleaned and processed. Please try a different input.")
         else:
-            st.warning("Please enter some text to analyze.")
+            st.warning("Please enter some text to get a prediction.")
+
 
 if __name__ == '__main__':
     st.set_page_config(
@@ -702,4 +706,3 @@ if __name__ == '__main__':
         dashboard_page()
     elif page == "🔍 Combined Prediction":
         combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer)
-l
