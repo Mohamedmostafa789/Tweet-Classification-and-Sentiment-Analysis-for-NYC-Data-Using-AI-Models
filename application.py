@@ -56,12 +56,6 @@ DATASET_FILES = {
     "Politics": {"id": "18Q9ORlDfoIQW_-RpwJy2qGrFWEA8dFQU", "name": "sample_twitter_data_politics_classified.csv"}
 }
 
-INCIDENT_FILES = {
-    "COVID-19": {"id": "1IbIfdrAU3ZYue5joLojPisRX3JJjwdvM", "name": "Incident Zip_covid_classified.csv"},
-    "Economics": {"id": "1SNpGyEHgrOe6ihx26vo38hf_zcxEnp64", "name": "Incident Zip_economics_classified.csv"},
-    "Politics": {"id": "1uNxIYzSY7cbgbuTc8zo0QYc5Dn5Ny2W_", "name": "Incident Zip_politics_classified.csv"}
-}
-
 MODEL_FILES = {
     "sentiment_model": {"id": "1lzZf79LGcB1J5SQsMh_mi1Jv_8V2q6K9", "name": "sentiment_model_large.pkl"},
     "sentiment_vectorizer": {"id": "12wRG57vERpdKgCaTiNyLiWC71KLWABK8", "name": "vectorizer_large.pkl"},
@@ -227,20 +221,6 @@ def load_data(dataset_key):
     return df
 
 @st.cache_data
-def load_incident_data(incident_key):
-    st.info("Loading incident data...")
-    file_info = INCIDENT_FILES[incident_key]
-    path = DATA_DIR / file_info["name"]
-    download_from_drive(file_info["id"], path)
-    
-    with st.spinner("Reading incident data into DataFrame..."):
-        incident_df = pd.read_csv(path, low_memory=False)
-        
-    incident_df['Incident Zip'] = incident_df['Incident Zip'].astype(str).str.zfill(5)
-    st.success("Incident data loaded successfully!")
-    return incident_df
-
-@st.cache_data
 def load_shapefile():
     with st.spinner("Preparing geographic data for maps..."):
         for i, sf in enumerate(SHAPE_FILES):
@@ -268,7 +248,7 @@ def load_shapefile():
         st.error(f"An error occurred while loading geographic data: {e}")
         st.warning("Please check the data files and try again.")
         st.stop()
-    
+
 # =========================
 # VISUALIZATION FUNCTIONS
 # =========================
@@ -445,17 +425,21 @@ def emotion_sentiment_heatmap(df):
     except Exception as e:
         st.error(f"An error occurred while generating the heatmap: {e}")
 
-def zip_code_maps(incident_df, nyc_gdf):
+def zip_code_maps(df, nyc_gdf):
     st.subheader("🗺 NYC Zip Code Incident Maps")
-    if incident_df.empty or 'Incident Zip' not in incident_df.columns:
-        st.warning("Incident data is not available or missing 'Incident Zip' column.")
+    if df.empty or 'zip' not in df.columns or 'latitude' not in df.columns or 'longitude' not in df.columns:
+        st.warning("Required columns ('zip', 'latitude', 'longitude') not available for this visualization.")
         return
     if nyc_gdf.empty or 'ZCTA5CE10' not in nyc_gdf.columns:
         st.warning("Geographic data is not available or missing 'ZCTA5CE10' column.")
         return
+    
     try:
-        incident_counts = incident_df.groupby('Incident Zip').size().reset_index(name='count')
-        merged_gdf = nyc_gdf.merge(incident_counts, left_on='ZCTA5CE10', right_on='Incident Zip', how='left')
+        st.info("Creating ZIP code choropleth map...")
+        # Clean and count incidents by ZIP code from the main dataframe
+        incident_counts = df.dropna(subset=['zip']).groupby('zip').size().reset_index(name='count')
+        
+        merged_gdf = nyc_gdf.merge(incident_counts, left_on='ZCTA5CE10', right_on='zip', how='left')
         merged_gdf['count'] = merged_gdf['count'].fillna(0)
         
         # Create the map
@@ -483,14 +467,6 @@ def zip_code_maps(incident_df, nyc_gdf):
             box-shadow: 3px;
         """
         
-        def style_and_tooltip(feature):
-            return {
-                'tooltip': folium.Tooltip(
-                    f"ZIP: {feature['properties']['ZCTA5CE10']}<br>Incidents: {int(feature['properties']['count'])}",
-                    style=tooltip_style
-                )
-            }
-        
         # Add tooltips to the map
         folium.GeoJson(
             merged_gdf,
@@ -512,10 +488,10 @@ def zip_code_maps(incident_df, nyc_gdf):
         st.error(f"An error occurred while generating the ZIP code map: {e}")
 
 
-def zip_code_heatmap(incident_df, nyc_gdf):
+def zip_code_heatmap(df):
     st.subheader("🗺 NYC Zip Code Incident Heatmap")
-    if incident_df.empty or 'latitude' not in incident_df.columns or 'longitude' not in incident_df.columns:
-        st.warning("Incident data is not available or missing location columns.")
+    if df.empty or 'latitude' not in df.columns or 'longitude' not in df.columns:
+        st.warning("Required columns ('latitude', 'longitude') not available for this visualization.")
         return
     
     from folium.plugins import HeatMap
@@ -523,17 +499,17 @@ def zip_code_heatmap(incident_df, nyc_gdf):
     try:
         st.info("Generating heatmap...")
         # Reduce data points if necessary for performance
-        if len(incident_df) > MAX_POINTS_MAP:
-            incident_df_small = incident_df.sample(MAX_POINTS_MAP, random_state=42)
+        if len(df) > MAX_POINTS_MAP:
+            df_small = df.sample(MAX_POINTS_MAP, random_state=42)
             st.warning(f"Using a sample of {MAX_POINTS_MAP} points for the heatmap for better performance.")
         else:
-            incident_df_small = incident_df
+            df_small = df
             
         m = folium.Map([40.7128, -74.0060], zoom_start=11)
         
         # Check if there's any data to plot
-        if not incident_df_small[['latitude', 'longitude']].empty:
-            heatmap_data = incident_df_small[['latitude', 'longitude']].values.tolist()
+        if not df_small[['latitude', 'longitude']].empty:
+            heatmap_data = df_small[['latitude', 'longitude']].values.tolist()
             HeatMap(heatmap_data, radius=15).add_to(m)
         else:
             st.warning("No location data to display on the heatmap.")
@@ -575,7 +551,7 @@ def project_report_page():
     st.title("📄 Project Report: Twitter Sentiment Analysis")
     st.markdown("""
     ### Introduction
-    This project is a comprehensive Streamlit application designed to analyze and visualize sentiment and emotion from Twitter data. It leverages machine learning models to classify tweets into sentiment categories (positive, neutral, negative) and emotions (e.g., happiness, sadness, anger). The application provides an interactive dashboard with various visualizations to explore the dataset's characteristics, including sentiment trends, emotion distributions, and geographical patterns.
+    This project is a comprehensive Streamlit application designed to analyze and visualize sentiment and emotion from Twitter data. It leverages machine learning models to classify tweets into sentiment categories (positive, neutral, negative) and emotions (e.g., happiness, sadness, anger). The application provides an an interactive dashboard with various visualizations to explore the dataset's characteristics, including sentiment trends, emotion distributions, and geographical patterns.
 
     ### Data Sources
     The application uses a combination of data sources:
@@ -613,14 +589,9 @@ def dashboard_page():
     topic_choice = st.sidebar.selectbox("Select Topic:", list(DATASET_FILES.keys()), index=0)
 
     # State management for data loading
-    # This block ensures all dataframes are loaded into session state at the beginning
-    # of the dashboard page, preventing the AttributeError.
     if 'df' not in st.session_state or st.session_state.get('df_key') != topic_choice:
         st.session_state.df = load_data(topic_choice)
         st.session_state.df_key = topic_choice
-    
-    if 'incident_df' not in st.session_state or st.session_state.get('df_key') != topic_choice:
-        st.session_state.incident_df = load_incident_data(topic_choice)
     
     if 'nyc_gdf' not in st.session_state:
         st.session_state.nyc_gdf = load_shapefile()
@@ -642,7 +613,6 @@ def dashboard_page():
     )
 
     df = st.session_state.df
-    incident_df = st.session_state.incident_df
     nyc_gdf = st.session_state.nyc_gdf
 
     st.subheader(f"Analyzing: {topic_choice} Tweets")
@@ -664,9 +634,9 @@ def dashboard_page():
     elif visualization_choice == "🔥 Emotion vs Sentiment Heatmap":
         emotion_sentiment_heatmap(df)
     elif visualization_choice == "🗺 ZIP Code Sentiment Maps":
-        zip_code_maps(incident_df, nyc_gdf)
+        zip_code_maps(df, nyc_gdf)
     elif visualization_choice == "🗺 ZIP Code Sentiment Heatmap":
-        zip_code_heatmap(incident_df, nyc_gdf)
+        zip_code_heatmap(df)
 
 
 def combined_prediction_page(sentiment_model, sentiment_vectorizer, emotion_model, emotion_vectorizer):
