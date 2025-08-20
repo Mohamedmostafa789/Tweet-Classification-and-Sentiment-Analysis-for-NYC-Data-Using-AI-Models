@@ -23,6 +23,7 @@ import warnings
 from typing import Optional, Dict, List, Tuple
 import threading
 import sys
+import io
 
 # Suppress all warnings for cleaner output
 warnings.filterwarnings('ignore')
@@ -410,6 +411,7 @@ def sentiment_map(df):
         st.plotly_chart(fig, use_container_width=True)
 
 def emotion_map(df):
+    st.subheader("Tweet Emotion Map")
     nyc_bbox = {'min_lon': -74.27, 'max_lon': -73.68, 'min_lat': 40.48, 'max_lat': 40.95}
     nyc_df = df[(df['longitude'].between(nyc_bbox['min_lon'], nyc_bbox['max_lon'])) &
                 (df['latitude'].between(nyc_bbox['min_lat'], nyc_bbox['max_lat']))]
@@ -748,69 +750,86 @@ def main():
         st.info("Please select a dataset from the sidebar and click 'Load Dataset' to begin.")
     else:
         st.sidebar.markdown("---")
-        # Updated radio button list to separate all advanced visualizations
-        visualization_choice = st.sidebar.radio(
-            "Choose a visualization:", 
-            [
-                "📈 Overall Sentiment Pie Chart", 
-                "😄 Overall Emotion Pie Chart", 
-                "🗺 Tweet Sentiment Map", 
-                "🗺 Tweet Emotion Map",
-                "--- Advanced Visualizations ---",
-                "📊 Top Emotions Pie Chart",
-                "📊 Emotion by Sentiment Bar Chart",
-                "📊 Emotion Confidence Box Plot",
-                "🗺 Geographical Sentiment Scatter Plot",
-                "📊 Median Income Histogram",
-                "📈 Sentiment Trends Line Chart",
-                "🔥 Emotion vs Sentiment Heatmap",
-                "--- Geo-Statistical Maps ---",
-                "🗺 ZIP Code Sentiment Maps",
-                "🗺 ZIP Code Sentiment Heatmap",
+        # Create tabs for the dashboard
+        tab_summary, tab_visualizations = st.tabs(["Dataset Summary", "Visualizations"])
+        
+        with tab_summary:
+            st.header("Dataset Summary")
+            st.markdown("This section provides a quick look at the raw data and its structure.")
+            st.subheader("Data at a glance:")
+            st.write(st.session_state.df.head())
+            st.subheader("Dataset Shape:")
+            st.write(f"Rows: {st.session_state.df.shape[0]:,}")
+            st.write(f"Columns: {st.session_state.df.shape[1]}")
+            st.subheader("DataFrame Info:")
+            buffer = io.StringIO()
+            st.session_state.df.info(buf=buffer)
+            s = buffer.getvalue()
+            st.text(s)  
+
+        with tab_visualizations:
+            visualization_choice = st.sidebar.radio(
+                "Choose a visualization:", 
+                [
+                    "📈 Overall Sentiment Pie Chart", 
+                    "😄 Overall Emotion Pie Chart", 
+                    "🗺 Tweet Sentiment Map", 
+                    "🗺 Tweet Emotion Map",
+                    "--- Advanced Visualizations ---",
+                    "📊 Top Emotions Pie Chart",
+                    "📊 Emotion by Sentiment Bar Chart",
+                    "📊 Emotion Confidence Box Plot",
+                    "🗺 Geographical Sentiment Scatter Plot",
+                    "📊 Median Income Histogram",
+                    "📈 Sentiment Trends Line Chart",
+                    "🔥 Emotion vs Sentiment Heatmap",
+                    "--- Geo-Statistical Maps ---",
+                    "🗺 ZIP Code Sentiment Maps",
+                    "🗺 ZIP Code Sentiment Heatmap",
+                    "💰 Average Median Income by Borough"
+                ]
+            )
+            st.header(f"Visualizing: {st.session_state['current_dataset_choice']}")
+
+            # Load geographic data only when needed for map visualizations
+            if visualization_choice in [
+                "🗺 ZIP Code Sentiment Maps", 
+                "🗺 ZIP Code Sentiment Heatmap", 
                 "💰 Average Median Income by Borough"
-            ]
-        )
-        st.header(f"Visualizing: {st.session_state['current_dataset_choice']}")
+            ]:
+                if st.session_state.nyc_gdf is None:
+                    with st.spinner("Loading geographic data..."):
+                        st.session_state['nyc_gdf'] = load_shapefile()
 
-        # Load geographic data only when needed for map visualizations
-        if visualization_choice in [
-            "🗺 ZIP Code Sentiment Maps", 
-            "🗺 ZIP Code Sentiment Heatmap", 
-            "💰 Average Median Income by Borough"
-        ]:
-            if st.session_state.nyc_gdf is None:
-                with st.spinner("Loading geographic data..."):
-                    st.session_state['nyc_gdf'] = load_shapefile()
-
-        # Updated if/elif block to call the new, separate visualization functions
-        if visualization_choice == "📈 Overall Sentiment Pie Chart":
-            sentiment_pie_chart(st.session_state.df)
-        elif visualization_choice == "😄 Overall Emotion Pie Chart":
-            emotion_pie_chart(st.session_state.df)
-        elif visualization_choice == "🗺 Tweet Sentiment Map":
-            sentiment_map(st.session_state.df)
-        elif visualization_choice == "🗺 Tweet Emotion Map":
-            emotion_map(st.session_state.df)
-        elif visualization_choice == "📊 Top Emotions Pie Chart":
-            top_emotions_pie_chart(st.session_state.df)
-        elif visualization_choice == "📊 Emotion by Sentiment Bar Chart":
-            emotion_sentiment_bar_chart(st.session_state.df)
-        elif visualization_choice == "📊 Emotion Confidence Box Plot":
-            emotion_confidence_boxplot(st.session_state.df)
-        elif visualization_choice == "🗺 Geographical Sentiment Scatter Plot":
-            geo_sentiment_scatterplot(st.session_state.df)
-        elif visualization_choice == "📊 Median Income Histogram":
-            median_income_histogram(st.session_state.df)
-        elif visualization_choice == "📈 Sentiment Trends Line Chart":
-            sentiment_trends_line_chart(st.session_state.df)
-        elif visualization_choice == "🔥 Emotion vs Sentiment Heatmap":
-            emotion_sentiment_heatmap(st.session_state.df)
-        elif visualization_choice == "🗺 ZIP Code Sentiment Maps":
-            zip_code_maps(st.session_state.incident_df, st.session_state.nyc_gdf)
-        elif visualization_choice == "🗺 ZIP Code Sentiment Heatmap":
-            zip_code_heatmap(st.session_state.incident_df, st.session_state.nyc_gdf)
-        elif visualization_choice == "💰 Average Median Income by Borough":
-            borough_income_chart(st.session_state.df)
+            # Updated if/elif block to call the new, separate visualization functions
+            if visualization_choice == "📈 Overall Sentiment Pie Chart":
+                sentiment_pie_chart(st.session_state.df)
+            elif visualization_choice == "😄 Overall Emotion Pie Chart":
+                emotion_pie_chart(st.session_state.df)
+            elif visualization_choice == "🗺 Tweet Sentiment Map":
+                sentiment_map(st.session_state.df)
+            elif visualization_choice == "🗺 Tweet Emotion Map":
+                emotion_map(st.session_state.df)
+            elif visualization_choice == "📊 Top Emotions Pie Chart":
+                top_emotions_pie_chart(st.session_state.df)
+            elif visualization_choice == "📊 Emotion by Sentiment Bar Chart":
+                emotion_sentiment_bar_chart(st.session_state.df)
+            elif visualization_choice == "📊 Emotion Confidence Box Plot":
+                emotion_confidence_boxplot(st.session_state.df)
+            elif visualization_choice == "🗺 Geographical Sentiment Scatter Plot":
+                geo_sentiment_scatterplot(st.session_state.df)
+            elif visualization_choice == "📊 Median Income Histogram":
+                median_income_histogram(st.session_state.df)
+            elif visualization_choice == "📈 Sentiment Trends Line Chart":
+                sentiment_trends_line_chart(st.session_state.df)
+            elif visualization_choice == "🔥 Emotion vs Sentiment Heatmap":
+                emotion_sentiment_heatmap(st.session_state.df)
+            elif visualization_choice == "🗺 ZIP Code Sentiment Maps":
+                zip_code_maps(st.session_state.incident_df, st.session_state.nyc_gdf)
+            elif visualization_choice == "🗺 ZIP Code Sentiment Heatmap":
+                zip_code_heatmap(st.session_state.incident_df, st.session_state.nyc_gdf)
+            elif visualization_choice == "💰 Average Median Income by Borough":
+                borough_income_chart(st.session_state.df)
 
 
 if __name__ == '__main__':
